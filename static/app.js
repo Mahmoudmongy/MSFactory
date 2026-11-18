@@ -148,7 +148,8 @@ const CURRENCY = { EGP: "ج.م", SAR: "ر.س", AED: "د.إ", USD: "$", EUR: "€
 
 export function money(value, currency) {
   const amount = Number(value ?? 0);
-  const formatted = new Intl.NumberFormat("ar-EG", {
+  // Latin digits (1234, not ١٢٣٤) while the currency symbol stays Arabic.
+  const formatted = new Intl.NumberFormat("en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(Math.abs(amount));
@@ -160,7 +161,12 @@ export function date(value) {
   if (!value) return "—";
   const parsed = new Date(`${String(value).slice(0, 10)}T00:00:00`);
   if (Number.isNaN(parsed.getTime())) return String(value);
-  return new Intl.DateTimeFormat("ar-EG", { day: "numeric", month: "short", year: "numeric" }).format(parsed);
+  // Arabic month name, Latin digits: 18 نوفمبر 2026.
+  return new Intl.DateTimeFormat("ar-EG-u-nu-latn", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  }).format(parsed);
 }
 
 export function today() {
@@ -1406,7 +1412,7 @@ const columnLabel = (key) => {
 const isPercentKey = (key) => /(percent|margin)/.test(key);
 const isDateKey = (key) => /(^|_)(date|received_at|closed_at|as_of)($|_)/.test(key) || key === "date";
 const isMoneyKey = (key) =>
-  /(amount|total|balance|cost|revenue|profit|value|price|tax|debit|credit|discount|paid|outstanding|closing|opening|due|net|gross|cash|receivables|payables|shortfall|spend)/.test(key) &&
+  /(amount|total|balance|cost|revenue|income|expense|profit|value|price|tax|debit|credit|discount|paid|outstanding|closing|opening|due|net|gross|cash|receivables|payables|shortfall|spend)/.test(key) &&
   !isPercentKey(key) && !/(count|quantity|qty|days)/.test(key);
 
 function formatCell(key, value) {

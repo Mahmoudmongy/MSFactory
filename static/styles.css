@@ -37,7 +37,10 @@
   --shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.14);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --nav-height: 64px;
-  --font: "Segoe UI", Tahoma, "Noto Naskh Arabic", "Noto Sans Arabic", system-ui, sans-serif;
+  /* Times New Roman first, as requested. Phones rarely ship it and it has no
+     Arabic glyphs on most of them, so the Arabic serif faces after it keep the
+     Arabic text looking consistent instead of dropping to the browser default. */
+  --font: "Times New Roman", "Tinos", "Liberation Serif", "Noto Naskh Arabic", "Traditional Arabic", serif;
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
