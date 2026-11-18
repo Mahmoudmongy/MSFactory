@@ -116,6 +116,11 @@ class InvoiceLineIn(BaseModel):
     discount_rate: Decimal = Decimal("0")
     tax_rate: Decimal = Decimal("0")
     account_id: int | None = None
+    # Naming an item makes the line move stock; leaving it blank keeps the
+    # line as free text (a service, a charge) that touches no inventory.
+    item_id: int | None = None
+    variant_id: int | None = None
+    warehouse_id: int | None = None
 
 
 class InvoiceCreate(BaseModel):
@@ -135,6 +140,13 @@ class InvoiceLineOut(ORMModel):
     unit_price: Decimal
     discount_rate: Decimal
     tax_rate: Decimal
+    item_id: int | None = None
+    variant_id: int | None = None
+    warehouse_id: int | None = None
+    # Frozen at issue time, so a past margin never changes.
+    cost_amount: Decimal = Decimal("0")
+    cost_manufactured: Decimal = Decimal("0")
+    cost_purchased: Decimal = Decimal("0")
 
 
 class InvoiceOut(ORMModel):
@@ -264,3 +276,215 @@ class TaxCodeUpdate(BaseModel):
     kind: str | None = None
     account_id: int | None = None
     is_active: bool | None = None
+
+
+# --- inventory: units, items, variants ---
+class UnitCreate(BaseModel):
+    code: str = Field(min_length=1, max_length=20)
+    name: str = Field(min_length=1, max_length=80)
+    name_ar: str = ""
+
+
+class UnitOut(ORMModel):
+    id: int
+    code: str
+    name: str
+    name_ar: str
+    is_active: bool
+
+
+class ItemGroupCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    name_ar: str = ""
+    parent_id: int | None = None
+
+
+class ItemGroupOut(ORMModel):
+    id: int
+    name: str
+    name_ar: str
+    parent_id: int | None
+
+
+class VariantIn(BaseModel):
+    code: str = ""
+    colour: str = ""
+    size: str = ""
+    barcode: str = ""
+    attributes: str = ""
+
+
+class VariantOut(ORMModel):
+    id: int
+    code: str
+    colour: str
+    size: str
+    barcode: str
+
+
+class ItemCreate(BaseModel):
+    code: str = ""
+    name: str = Field(min_length=1, max_length=200)
+    name_ar: str = ""
+    description: str = ""
+    item_type: str = "purchased"
+    item_group_id: int | None = None
+    base_unit_id: int | None = None
+    track_inventory: bool = True
+    purchase_price: Decimal = Decimal("0")
+    sale_price: Decimal = Decimal("0")
+    tax_code_id: int | None = None
+    reorder_level: Decimal = Decimal("0")
+    default_warehouse_id: int | None = None
+    image_url: str = ""
+    notes: str = ""
+    variants: list[VariantIn] = []
+
+
+class ItemUpdate(BaseModel):
+    name: str | None = None
+    name_ar: str | None = None
+    description: str | None = None
+    item_type: str | None = None
+    item_group_id: int | None = None
+    base_unit_id: int | None = None
+    track_inventory: bool | None = None
+    purchase_price: Decimal | None = None
+    sale_price: Decimal | None = None
+    tax_code_id: int | None = None
+    reorder_level: Decimal | None = None
+    default_warehouse_id: int | None = None
+    image_url: str | None = None
+    notes: str | None = None
+    is_active: bool | None = None
+
+
+class ItemOut(ORMModel):
+    id: int
+    code: str
+    name: str
+    name_ar: str
+    item_type: str
+    item_group_id: int | None
+    base_unit_id: int | None
+    track_inventory: bool
+    has_variants: bool
+    purchase_price: Decimal
+    sale_price: Decimal
+    reorder_level: Decimal
+    is_active: bool
+
+
+class ItemDetailOut(ItemOut):
+    variants: list[VariantOut] = []
+
+
+# --- inventory: warehouses and stock ---
+class WarehouseCreate(BaseModel):
+    code: str = ""
+    name: str = Field(min_length=1, max_length=120)
+    name_ar: str = ""
+    parent_id: int | None = None
+    is_group: bool = False
+    address: str = ""
+    notes: str = ""
+
+
+class WarehouseOut(ORMModel):
+    id: int
+    code: str
+    name: str
+    name_ar: str
+    parent_id: int | None
+    is_group: bool
+    is_active: bool
+
+
+class StockRow(BaseModel):
+    item_id: int
+    item_code: str
+    item_name: str
+    item_name_ar: str
+    variant_id: int | None
+    variant_code: str
+    colour: str
+    size: str
+    unit: str
+    warehouse_id: int
+    warehouse_name: str
+    quantity: Decimal
+    unit_cost: Decimal
+    value: Decimal
+    reorder_level: Decimal
+
+
+class StockReceive(BaseModel):
+    item_id: int
+    warehouse_id: int
+    quantity: Decimal
+    unit_cost: Decimal = Decimal("0")
+    movement_date: date
+    variant_id: int | None = None
+    kind: str = "receipt"
+    reference: str = ""
+    notes: str = ""
+
+
+class StockIssue(BaseModel):
+    item_id: int
+    warehouse_id: int
+    quantity: Decimal
+    movement_date: date
+    variant_id: int | None = None
+    kind: str = "issue"
+    reference: str = ""
+    notes: str = ""
+
+
+class StockTransfer(BaseModel):
+    item_id: int
+    from_warehouse_id: int
+    to_warehouse_id: int
+    quantity: Decimal
+    movement_date: date
+    variant_id: int | None = None
+    reference: str = ""
+
+
+class StockDamage(BaseModel):
+    item_id: int
+    warehouse_id: int
+    quantity: Decimal
+    movement_date: date
+    variant_id: int | None = None
+    reason: str = ""
+
+
+class StockCount(BaseModel):
+    item_id: int
+    warehouse_id: int
+    counted_quantity: Decimal
+    movement_date: date
+    variant_id: int | None = None
+    notes: str = ""
+
+
+class StockMovementOut(ORMModel):
+    id: int
+    movement_date: date
+    kind: str
+    item_id: int
+    variant_id: int | None
+    warehouse_id: int
+    quantity: Decimal
+    unit_cost: Decimal
+    total_cost: Decimal
+    reference: str
+    notes: str
+
+
+class InventorySummary(BaseModel):
+    total_value: Decimal
+    item_count: int
+    warehouse_count: int
+    costing_method: str

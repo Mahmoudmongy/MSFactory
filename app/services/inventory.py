@@ -17,13 +17,15 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..core.errors import NotFoundError, ValidationError
 from ..db.base import utcnow
 from ..db.models import (
+    DAMAGED_CODE,
     INBOUND_KINDS,
+    INVENTORY_CODE,
     Item,
     ItemVariant,
     StockConsumption,
@@ -45,14 +47,16 @@ from .accounting import AccountingService
 ZERO = Decimal("0.00")
 FOUR = Decimal("0.0001")
 
-# Accounts used to keep inventory and the books in step.
-INVENTORY_CODE = "1200"
-DAMAGED_CODE = "1210"
+# Accounts used to keep inventory and the books in step. INVENTORY_CODE,
+# DAMAGED_CODE and WIP_CODE come from the model layer so both agree.
 SHRINKAGE_CODE = "5600"
-WIP_CODE = "1220"
 
 # Costing methods a company can choose between in settings.
 COSTING_METHODS = ("fifo", "weighted_average")
+
+# Layers whose goods came off a work order are "manufactured"; every other
+# source is "purchased". Reports split margin on this one distinction.
+MANUFACTURED_SOURCE = "production_receipt"
 
 
 class InventoryService:
@@ -620,6 +624,57 @@ class InventoryService:
 
         method = SettingRepository(self.db, self.company_id).get("costing_method", "fifo")
         return method if method in COSTING_METHODS else "fifo"
+
+    def origin_split(self, movement_id: int) -> dict[str, dict[str, Decimal]]:
+        """Split a movement by origin: how much, and at what cost, was made vs bought.
+
+        Goods made by a work order enter stock through a ``production_receipt``
+        layer; anything else was bought. Reading the split from the layers the
+        movement actually consumed keeps it right even when one issue draws on
+        both kinds at once, which is exactly what a mixed sale does.
+
+        Both quantity and cost are returned because they answer different
+        questions: quantity divides revenue (every unit sells at one price),
+        cost measures the margin.
+        """
+        rows = self.db.execute(
+            select(
+                StockLayer.source_type,
+                func.sum(StockConsumption.quantity),
+                func.sum(StockConsumption.total_cost),
+            )
+            .join(StockLayer, StockLayer.id == StockConsumption.layer_id)
+            .where(
+                StockConsumption.company_id == self.company_id,
+                StockConsumption.movement_id == movement_id,
+            )
+            .group_by(StockLayer.source_type)
+        ).all()
+        split = {
+            "manufactured": {"quantity": Decimal("0.0000"), "cost": ZERO},
+            "purchased": {"quantity": Decimal("0.0000"), "cost": ZERO},
+        }
+        for source_type, quantity, total in rows:
+            key = "manufactured" if source_type == MANUFACTURED_SOURCE else "purchased"
+            split[key]["quantity"] += Decimal(str(quantity or 0))
+            split[key]["cost"] += to_money(total)
+        return split
+
+    def resolve_warehouse(self, item: Item, warehouse_id: int | None) -> int:
+        """Pick the warehouse to move stock in or out of.
+
+        An explicit choice wins; otherwise the item's default; otherwise the
+        first leaf warehouse, so a single-warehouse company need not choose.
+        """
+        if warehouse_id:
+            self._leaf_warehouse(warehouse_id)
+            return warehouse_id
+        if item.default_warehouse_id:
+            return item.default_warehouse_id
+        for warehouse in self.warehouses.list():
+            if not warehouse.is_group:
+                return warehouse.id
+        raise ValidationError("لا يوجد مخزن فرعي يمكن الصرف منه — أنشئ مخزناً أولاً")
 
     def stock_on_hand(self, *, warehouse_id: int | None = None, item_id: int | None = None) -> list[dict]:
         return self.layers.on_hand_rows(warehouse_id=warehouse_id, item_id=item_id)

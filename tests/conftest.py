@@ -79,6 +79,15 @@ def _refuse_to_run_on_live_data():
 
 @pytest.fixture(scope="session", autouse=True)
 def _schema():
+    """Rebuild the schema from the models at the start of every session.
+
+    Dropping first matters: ``create_all`` only creates missing *tables*, so a
+    column added to an existing table would otherwise be silently absent and
+    the tests would fail on a database that no longer matches the models. This
+    is safe precisely because the guard above proves we are on a *_test
+    database.
+    """
+    Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     yield
 

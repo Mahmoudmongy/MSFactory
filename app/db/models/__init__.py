@@ -18,7 +18,9 @@ from .accounting import (
 )
 from .identity import Company, CompanySetting, Membership, RefreshToken, User
 from .inventory import (
+    DAMAGED_CODE,
     INBOUND_KINDS,
+    INVENTORY_CODE,
     ITEM_TYPES,
     MOVEMENT_KINDS,
     Item,
@@ -46,8 +48,10 @@ __all__ = [
     "AR_CONTROL_CODE",
     "CASH_CODES",
     "COGS_CODE",
+    "DAMAGED_CODE",
     "DEBIT_NORMAL_TYPES",
     "INBOUND_KINDS",
+    "INVENTORY_CODE",
     "ITEM_TYPES",
     "MOVEMENT_KINDS",
     "SALES_CODE",

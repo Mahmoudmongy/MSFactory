@@ -3,6 +3,15 @@
 An invoice becomes an accounting fact when issued: at that moment a balanced
 journal entry is posted and linked back to the document. Voiding posts a
 reversal instead of deleting anything.
+
+When a line names a stocked item the invoice also moves stock:
+
+* a sales line issues the goods and books cost of sale, so the margin on that
+  line is real rather than assumed;
+* a purchase line receives the goods and opens a FIFO layer at the price paid.
+
+The cost is frozen onto the line at that moment. That is what makes a past
+profit stable: repricing a purchase later can never rewrite an earlier sale.
 """
 from __future__ import annotations
 
@@ -17,6 +26,7 @@ from ..db.models import (
     AP_CONTROL_CODE,
     AR_CONTROL_CODE,
     COGS_CODE,
+    INVENTORY_CODE,
     SALES_CODE,
     VAT_PAYABLE_CODE,
     Invoice,
@@ -26,6 +36,7 @@ from ..domain.money import EntryLine, compute_line, summarize, to_money
 from ..repositories.core import AccountRepository, AuditRepository, ContactRepository, SequenceRepository
 from ..repositories.documents import InvoiceRepository
 from .accounting import AccountingService
+from .inventory import InventoryService
 
 ZERO = Decimal("0.00")
 
@@ -41,6 +52,7 @@ class InvoiceService:
         self.sequences = SequenceRepository(db, company_id)
         self.audit = AuditRepository(db, company_id)
         self.accounting = AccountingService(db, company_id, user_id)
+        self.inventory = InventoryService(db, company_id, user_id)
 
     def list(self, kind: str | None = None, contact_id: int | None = None) -> list[Invoice]:
         return self.invoices.list(kind=kind, contact_id=contact_id)
@@ -106,11 +118,15 @@ class InvoiceService:
                     discount_rate=raw.get("discount_rate", 0),
                     tax_rate=raw.get("tax_rate", 0),
                     account_id=raw.get("account_id"),
+                    item_id=raw.get("item_id"),
+                    variant_id=raw.get("variant_id"),
+                    warehouse_id=raw.get("warehouse_id"),
                 )
             )
         self.invoices.add(invoice)
 
         if status == "issued":
+            self._move_stock(invoice)
             self._post(invoice)
         self.audit.record(
             action="invoice.create",
@@ -129,6 +145,7 @@ class InvoiceService:
             raise ImmutableRecordError("Cannot void an invoice that has payments; reverse the payments first")
         if invoice.journal_entry_id:
             self.accounting.reverse(invoice.journal_entry_id, reason=reason or f"void {invoice.number}")
+        self._reverse_stock(invoice, reason)
         invoice.status = "void"
         self.audit.record(
             action="invoice.void",
@@ -140,20 +157,137 @@ class InvoiceService:
         self.db.flush()
         return invoice
 
+    def _reverse_stock(self, invoice: Invoice, reason: str) -> None:
+        """Undo the stock a voided invoice moved, by posting the opposite move.
+
+        A sale's issue is put back into the warehouse at the cost it left with,
+        so the goods return at their original value rather than today's price.
+        A purchase's receipt is taken back out, which is safe because voiding
+        requires the invoice to be unpaid.
+        """
+        for line in invoice.lines:
+            if not line.item_id:
+                continue
+            item = self.inventory.items.get(line.item_id)
+            if not item.track_inventory:
+                continue
+            warehouse_id = self.inventory.resolve_warehouse(item, line.warehouse_id)
+            quantity = Decimal(str(line.quantity or 0))
+            if quantity <= 0:
+                continue
+
+            if invoice.kind == "sales":
+                self.inventory.receive(
+                    item_id=item.id,
+                    warehouse_id=warehouse_id,
+                    quantity=quantity,
+                    unit_cost=line.cost_amount / quantity if quantity else ZERO,
+                    movement_date=invoice.issue_date,
+                    variant_id=line.variant_id,
+                    kind="adjustment_in",
+                    source_type="invoice_void",
+                    source_id=invoice.id,
+                    reference=invoice.number,
+                    notes=reason,
+                    post_journal=False,
+                )
+            else:
+                self.inventory.issue(
+                    item_id=item.id,
+                    warehouse_id=warehouse_id,
+                    quantity=quantity,
+                    movement_date=invoice.issue_date,
+                    variant_id=line.variant_id,
+                    kind="adjustment_out",
+                    source_type="invoice_void",
+                    source_id=invoice.id,
+                    reference=invoice.number,
+                    notes=reason,
+                    post_journal=False,
+                )
+        self.db.flush()
+
+    def _move_stock(self, invoice: Invoice) -> None:
+        """Move stock for every line that names an item, and freeze its cost.
+
+        A sale issues goods and records what they cost. The split between
+        manufactured and purchased comes from the layers the issue consumed,
+        so a sale of mixed goods — some made, some bought — reports each part
+        against its true cost without anyone labelling the invoice.
+        """
+        for line in invoice.lines:
+            if not line.item_id:
+                continue
+            item = self.inventory.items.get(line.item_id)
+            if not item.track_inventory:
+                continue
+            warehouse_id = self.inventory.resolve_warehouse(item, line.warehouse_id)
+            quantity = Decimal(str(line.quantity or 0))
+            if quantity <= 0:
+                continue
+
+            if invoice.kind == "sales":
+                movement, cost = self.inventory.issue(
+                    item_id=item.id,
+                    warehouse_id=warehouse_id,
+                    quantity=quantity,
+                    movement_date=invoice.issue_date,
+                    variant_id=line.variant_id,
+                    kind="issue",
+                    source_type="invoice",
+                    source_id=invoice.id,
+                    reference=invoice.number,
+                    post_journal=False,
+                )
+                split = self.inventory.origin_split(movement.id)
+                line.cost_amount = to_money(cost)
+                line.cost_manufactured = split["manufactured"]["cost"]
+                line.cost_purchased = split["purchased"]["cost"]
+                line.quantity_manufactured = split["manufactured"]["quantity"]
+                line.quantity_purchased = split["purchased"]["quantity"]
+            else:
+                unit_cost = Decimal(str(line.unit_price or 0))
+                self.inventory.receive(
+                    item_id=item.id,
+                    warehouse_id=warehouse_id,
+                    quantity=quantity,
+                    unit_cost=unit_cost,
+                    movement_date=invoice.issue_date,
+                    variant_id=line.variant_id,
+                    kind="receipt",
+                    source_type="invoice",
+                    source_id=invoice.id,
+                    reference=invoice.number,
+                    post_journal=False,
+                )
+        self.db.flush()
+
     def _post(self, invoice: Invoice) -> None:
         control = self.accounts.get_by_code(AR_CONTROL_CODE if invoice.kind == "sales" else AP_CONTROL_CODE)
         vat = self.accounts.by_code(VAT_PAYABLE_CODE)
         default_account = self.accounts.by_code(SALES_CODE if invoice.kind == "sales" else COGS_CODE)
+        inventory = self.accounts.by_code(INVENTORY_CODE)
+        cogs = self.accounts.by_code(COGS_CODE)
 
         lines: list[EntryLine] = []
+        stock_cost = ZERO
         for line in invoice.lines:
             amounts = compute_line(line.quantity, line.unit_price, line.discount_rate, line.tax_rate)
             if amounts.net == ZERO:
                 continue
-            account_id = line.account_id or (default_account.id if default_account else control.id)
             if invoice.kind == "sales":
+                # A stocked line credits sales; its cost is posted separately
+                # below so revenue and cost of sale stay on their own accounts.
+                account_id = line.account_id or (default_account.id if default_account else control.id)
                 lines.append(EntryLine(account_id=account_id, credit=amounts.net, description=line.description))
+                stock_cost += to_money(line.cost_amount)
             else:
+                # A stocked purchase line debits inventory rather than an
+                # expense: the cost belongs to the goods until they are sold.
+                if line.item_id and inventory:
+                    account_id = line.account_id or inventory.id
+                else:
+                    account_id = line.account_id or (default_account.id if default_account else control.id)
                 lines.append(EntryLine(account_id=account_id, debit=amounts.net, description=line.description))
 
         if invoice.kind == "sales":
@@ -168,6 +302,21 @@ class InvoiceService:
             if to_money(invoice.tax_total) and vat:
                 lines.append(
                     EntryLine(account_id=vat.id, credit=invoice.tax_total, description="ضريبة القيمة المضافة")
+                )
+            if stock_cost > ZERO and cogs and inventory:
+                lines.append(
+                    EntryLine(
+                        account_id=cogs.id,
+                        debit=stock_cost,
+                        description=f"تكلفة مبيعات {invoice.number}",
+                    )
+                )
+                lines.append(
+                    EntryLine(
+                        account_id=inventory.id,
+                        credit=stock_cost,
+                        description=f"صرف مخزون {invoice.number}",
+                    )
                 )
         else:
             lines.append(

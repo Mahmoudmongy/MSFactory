@@ -25,6 +25,17 @@ def dashboard(
     return ReportService(db, principal.company_id).dashboard()
 
 
+@router.get("/profit-by-source")
+def profit_by_source(
+    start: date | None = None,
+    end: date | None = None,
+    principal: Principal = Depends(require(Permission.REPORT_VIEW)),
+    db: Session = Depends(get_session),
+):
+    """Revenue, cost and profit split into made-in-house vs bought-for-resale."""
+    return ReportService(db, principal.company_id).profit_by_source(start=start, end=end)
+
+
 @router.get("/trial-balance")
 def trial_balance(
     upto: date | None = None,

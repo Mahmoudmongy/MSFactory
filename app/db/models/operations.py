@@ -92,7 +92,27 @@ class InvoiceLine(Base, TenantMixin):
     tax_rate: Mapped[Decimal] = mapped_column(Numeric(7, 4), default=0, nullable=False)
     account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"), nullable=True)
 
+    # A line may name a stocked item. When it does, issuing the invoice moves
+    # stock and books cost of sale; a free-text line (a service, a charge)
+    # names no item and touches inventory not at all.
+    item_id: Mapped[int | None] = mapped_column(ForeignKey("items.id"), nullable=True, index=True)
+    variant_id: Mapped[int | None] = mapped_column(ForeignKey("item_variants.id"), nullable=True)
+    warehouse_id: Mapped[int | None] = mapped_column(ForeignKey("warehouses.id"), nullable=True)
+
+    # Cost of this line, frozen when the invoice was issued, split by whether
+    # the units came off a work order or from a supplier. Both the quantity and
+    # the cost are kept: revenue is apportioned by quantity (every unit sells at
+    # the same price), while margin needs the cost. Copied, never derived, so a
+    # later change to a cost layer cannot restate a past profit.
+    cost_amount: Mapped[Decimal] = mapped_column(Numeric(18, 4), default=0, nullable=False)
+    cost_manufactured: Mapped[Decimal] = mapped_column(Numeric(18, 4), default=0, nullable=False)
+    cost_purchased: Mapped[Decimal] = mapped_column(Numeric(18, 4), default=0, nullable=False)
+    quantity_manufactured: Mapped[Decimal] = mapped_column(Numeric(18, 4), default=0, nullable=False)
+    quantity_purchased: Mapped[Decimal] = mapped_column(Numeric(18, 4), default=0, nullable=False)
+
     invoice = relationship("Invoice", back_populates="lines")
+    item = relationship("Item")
+    variant = relationship("ItemVariant")
 
 
 class Payment(Base, TenantMixin, TimestampMixin):

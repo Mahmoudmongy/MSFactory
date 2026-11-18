@@ -30,7 +30,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from ..base import Base, TenantMixin, TimestampMixin
+from ..base import Base, TenantMixin, TimestampMixin, utcnow
 
 # An item is bought, made, both, or not stocked at all (a service).
 ITEM_TYPES = ("purchased", "manufactured", "both", "service")
@@ -49,6 +49,12 @@ MOVEMENT_KINDS = (
     "adjustment_out",  # stock count loss
     "damage",  # written off as damaged
 )
+
+# Accounts every company's inventory posts to. Kept here so the model layer
+# and the services agree on the same codes.
+INVENTORY_CODE = "1200"
+DAMAGED_CODE = "1210"
+WIP_CODE = "1220"
 
 # Kinds that add quantity to the pool and therefore open a FIFO layer.
 INBOUND_KINDS = ("opening", "receipt", "transfer_in", "production_receipt", "adjustment_in")
@@ -211,7 +217,7 @@ class StockMovement(Base, TenantMixin):
         ForeignKey("stock_movements.id"), nullable=True
     )
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     item = relationship("Item")
     variant = relationship("ItemVariant")
@@ -239,7 +245,7 @@ class StockLayer(Base, TenantMixin):
     movement_id: Mapped[int | None] = mapped_column(ForeignKey("stock_movements.id"), nullable=True)
     source_type: Mapped[str] = mapped_column(String(30), default="")
     source_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class StockConsumption(Base, TenantMixin):

@@ -12,7 +12,8 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..db.models import Account, JournalEntry, JournalLine
+from ..db.models import Account, Invoice, InvoiceLine, JournalEntry, JournalLine
+from ..domain.money import compute_line
 from ..repositories.core import AccountRepository
 from ..repositories.documents import InvoiceRepository
 
@@ -37,6 +38,133 @@ class ReportService:
         if end:
             stmt = stmt.where(JournalEntry.entry_date <= end)
         return stmt
+
+    def profit_by_source(self, start: date | None = None, end: date | None = None) -> dict:
+        """Revenue and cost split by whether the goods were made or bought.
+
+        This answers the question a factory actually asks: "did I make more on
+        what I produced or on what I resold?" The split comes from each sold
+        line's frozen cost, which in turn came from the layers it consumed —
+        so a single invoice selling both kinds is divided correctly, and no one
+        has to label anything by hand.
+
+        Revenue is apportioned across the two origins by *quantity*, not by
+        cost: every unit on a line sells at the same price, so a unit that was
+        made earns the same revenue as one that was bought. Splitting by cost
+        would hand the cheaper-to-make units less revenue, which is backwards.
+        The residual goes to the second bucket so rounding never leaks a cent.
+        """
+        stmt = (
+            select(InvoiceLine)
+            .join(Invoice, Invoice.id == InvoiceLine.invoice_id)
+            .where(
+                InvoiceLine.company_id == self.company_id,
+                Invoice.kind == "sales",
+                Invoice.status != "void",
+            )
+        )
+        if start:
+            stmt = stmt.where(Invoice.issue_date >= start)
+        if end:
+            stmt = stmt.where(Invoice.issue_date <= end)
+
+        buckets = {
+            "manufactured": {"revenue": ZERO, "cost": ZERO},
+            "purchased": {"revenue": ZERO, "cost": ZERO},
+            "unclassified": {"revenue": ZERO, "cost": ZERO},
+        }
+        per_item: dict[int, dict] = {}
+
+        for line in self.db.scalars(stmt):
+            amounts = compute_line(line.quantity, line.unit_price, line.discount_rate, line.tax_rate)
+            manufactured = _money(line.cost_manufactured)
+            purchased = _money(line.cost_purchased)
+            total_cost = manufactured + purchased
+
+            if total_cost == ZERO:
+                # A free-text line, or goods that entered stock before the
+                # origin was tracked. Reported apart so it cannot distort a
+                # margin that is genuinely known.
+                buckets["unclassified"]["revenue"] += amounts.net
+                continue
+
+            # Revenue follows the units, not the cost: every unit on a line
+            # sells at the same price, so a unit that was made earns exactly as
+            # much as one that was bought. Splitting by cost would hand the
+            # cheaper-to-make units less revenue, which is backwards. The
+            # remainder goes to the purchased bucket so no cent leaks.
+            made_qty = Decimal(str(line.quantity_manufactured or 0))
+            bought_qty = Decimal(str(line.quantity_purchased or 0))
+            total_qty = made_qty + bought_qty
+            made_revenue = (
+                (amounts.net * made_qty / total_qty).quantize(Decimal("0.01"))
+                if total_qty
+                else ZERO
+            )
+            buckets["manufactured"]["revenue"] += made_revenue
+            buckets["manufactured"]["cost"] += manufactured
+            buckets["purchased"]["revenue"] += amounts.net - made_revenue
+            buckets["purchased"]["cost"] += purchased
+
+            if line.item_id:
+                row = per_item.setdefault(
+                    line.item_id,
+                    {
+                        "item_id": line.item_id,
+                        "revenue": ZERO,
+                        "cost": ZERO,
+                        "manufactured_cost": ZERO,
+                        "purchased_cost": ZERO,
+                        "quantity": ZERO,
+                    },
+                )
+                row["revenue"] += amounts.net
+                row["cost"] += total_cost
+                row["manufactured_cost"] += manufactured
+                row["purchased_cost"] += purchased
+                row["quantity"] += Decimal(str(line.quantity or 0))
+
+        items: list[dict] = []
+        for row in per_item.values():
+            row["profit"] = _money(row["revenue"] - row["cost"])
+            row["margin_percent"] = (
+                (row["profit"] / row["revenue"] * 100).quantize(Decimal("0.01"))
+                if row["revenue"]
+                else ZERO
+            )
+            items.append(row)
+        items.sort(key=lambda r: r["profit"], reverse=True)
+
+        result = {}
+        for key, bucket in buckets.items():
+            revenue = _money(bucket["revenue"])
+            cost = _money(bucket["cost"])
+            result[key] = {
+                "revenue": revenue,
+                "cost": cost,
+                "profit": _money(revenue - cost),
+                "margin_percent": (
+                    ((revenue - cost) / revenue * 100).quantize(Decimal("0.01")) if revenue else ZERO
+                ),
+            }
+        total_revenue = _money(sum((b["revenue"] for b in result.values()), ZERO))
+        total_cost = _money(sum((b["cost"] for b in result.values()), ZERO))
+        return {
+            "manufactured": result["manufactured"],
+            "purchased": result["purchased"],
+            "unclassified": result["unclassified"],
+            "total": {
+                "revenue": total_revenue,
+                "cost": total_cost,
+                "profit": _money(total_revenue - total_cost),
+                "margin_percent": (
+                    ((total_revenue - total_cost) / total_revenue * 100).quantize(Decimal("0.01"))
+                    if total_revenue
+                    else ZERO
+                ),
+            },
+            "items": items,
+        }
 
     def trial_balance(self, upto: date | None = None) -> dict:
         stmt = (
