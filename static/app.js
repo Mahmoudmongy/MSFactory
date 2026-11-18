@@ -308,15 +308,16 @@ const NAV_SECTIONS = [
   { href: "#/accounts", icon: "▤", label: "الحسابات النقدية والبنوك" },
   { href: "#/contacts", icon: "♙", label: "العملاء والموردون" },
   { href: "#/payments", icon: "↙", label: "المقبوضات والمدفوعات" },
-  { href: "#/invoices", icon: "▧", label: "الفواتير والمرتجعات" },
+  { href: "#/invoices", icon: "▧", label: "الفواتير" },
   { href: "#/inventory", icon: "◇", label: "الأصناف والمخازن" },
   { href: "#/production", icon: "⚙", label: "أوامر الإنتاج" },
-  { href: "#/ledger", icon: "☷", label: "شجرة الحسابات والميزان" },
+  { href: "#/ledger", icon: "☷", label: "شجرة الحسابات" },
   { href: "#/reports", icon: "▥", label: "التقارير" },
-  { href: "#/statements", icon: "▦", label: "القوائم المالية" },
+  { href: "#/statements", icon: "▧", label: "القوائم المالية" },
   { href: "#/journal", icon: "≡", label: "قيود اليومية" },
-  { href: "#/timeline", icon: "◷", label: "السجل الزمني", perm: "audit.view" },
   { href: "#/team", icon: "♙", label: "الموظفون والصلاحيات", perm: "user.manage" },
+  { href: "#/assistant", icon: "✦", label: "المساعد الذكي" },
+  { href: "#/timeline", icon: "◷", label: "السجل الزمني", perm: "audit.view" },
   { href: "#/settings", icon: "⚙", label: "الإعدادات", perm: "settings.manage" },
 ];
 
@@ -482,7 +483,7 @@ function loadTheme() {
 
 const TABS = [
   { href: "#/dashboard", icon: "🏠", label: "الملخص" },
-  { href: "#/invoices", icon: "🧾", label: "الفواتير والمرتجعات" },
+  { href: "#/invoices", icon: "🧾", label: "الفواتير" },
   { href: "#/payments", icon: "💵", label: "المقبوضات والمدفوعات" },
   { href: "#/production", icon: "🏭", label: "أوامر الإنتاج" },
   { href: "#/contacts", icon: "👥", label: "العملاء والموردون" },
@@ -2251,35 +2252,164 @@ async function renderJournalForm() {
 
 // ------------------------------------------------- accounts (cash & banks)
 
-/* Cash and bank accounts are ordinary ledger accounts filtered by the codes the
-   chart of accounts reserves for them, so no separate table is needed. */
+/** Cash and bank accounts are assets under 1xxx. A "cash" account is 1010 and
+ * its children; a "bank" account is 1020 and its children. Anything else under
+ * assets (receivables, inventory) is not cash, so it stays out of this screen. */
+const CASH_ROOTS = { cash: "1010", bank: "1020" };
+
 async function renderAccounts() {
+  const expanded = new Set((hashParam("open") || "cash,bank").split(",").filter(Boolean));
   setScreen(spinner(), { appbar: appbar({ title: "الحسابات النقدية والبنوك" }), tabbar: tabbar() });
   try {
-    const accounts = await loadAccounts(true);
-    const cash = accounts.filter(
-      (a) => !a.is_group && /^(1[01]\d\d)/.test(a.code) && /(نقد|بنك|خزينة|صندوق|cash|bank)/i.test(`${a.name} ${a.name_ar}`)
-    );
-    const rows = cash
-      .map(
-        (a) => `<li><a class="list__item" href="#/ledger/${a.id}">
-        <div class="list__main"><div class="list__title">${escapeHtml(a.name_ar || a.name)}</div>
-          <div class="list__meta num">${escapeHtml(a.code)}</div></div>
-        <span style="color:var(--ink-400)">‹</span></a></li>`
-      )
-      .join("");
-    setScreen(
-      el(`<div>
+    const [accounts, report] = await Promise.all([loadAccounts(true), api("/reports/account-balances")]);
+    // account-balances groups by type and carries the live balance, so one call
+    // gives both the tree and the numbers without a request per account.
+    const balances = new Map();
+    for (const group of Object.values(report.by_type || {})) {
+      for (const a of group) balances.set(a.id, a);
+    }
+    const byParent = new Map();
+    for (const a of accounts) {
+      const key = a.parent_id ?? 0;
+      if (!byParent.has(key)) byParent.set(key, []);
+      byParent.get(key).push(a);
+    }
+    const balanceOf = (a) => Number(balances.get(a.id)?.balance ?? 0);
+
+    // A root's balance is the sum of its whole subtree, because the leaf holds
+    // the money and the group is only a heading.
+    const subtreeBalance = (id) => {
+      const children = byParent.get(id) || [];
+      if (!children.length) return balanceOf(accounts.find((a) => a.id === id) || {});
+      return children.reduce((sum, child) => sum + subtreeBalance(child.id), 0);
+    };
+
+    const rowsFor = (root, depth) => {
+      const children = byParent.get(root.id) || [];
+      return children
+        .map((child) => {
+          const hasChildren = (byParent.get(child.id) || []).length > 0;
+          const open = expanded.has(`c${child.id}`);
+          const arrow = hasChildren
+            ? `<button class="tree-toggle" type="button" data-toggle-account="${child.id}"
+                 aria-expanded="${open}" aria-label="إظهار الحسابات الفرعية">${open ? "▾" : "▸"}</button>`
+            : '<span class="tree-toggle tree-toggle--empty"></span>';
+          const row = `<li><div class="list__item">
+            <div class="list__main" style="padding-inline-start:${depth * 14}px">
+              <div class="list__title">${arrow}<a href="#/ledger/${child.id}">${escapeHtml(child.name_ar || child.name)}</a></div>
+              <div class="list__meta num">${escapeHtml(child.code)}</div></div>
+            <div class="list__value num">${money(subtreeBalance(child.id))}</div></div></li>`;
+          return open ? row + rowsFor(child, depth + 1) : row;
+        })
+        .join("");
+    };
+
+    const groups = Object.entries(CASH_ROOTS).map(([group, code]) => {
+      const root = accounts.find((a) => a.code === code);
+      if (!root) return "";
+      const open = expanded.has(group);
+      const children = byParent.get(root.id) || [];
+      return `<div class="section-title">${group === "cash" ? "النقدية" : "البنك"}</div>
         <div class="card card--flush">
-          ${cash.length ? `<ul class="list">${rows}</ul>` : emptyState("🏦", "لا توجد حسابات نقدية", "أضف حسابات النقدية والبنوك من دليل الحسابات")}
-        </div>
-        <div class="action-bar"><a class="btn btn--ghost" href="#/ledger">دليل الحسابات</a></div>
-      </div>`),
-      { appbar: appbar({ title: "الحسابات النقدية والبنوك" }), tabbar: tabbar() }
-    );
+          <div class="list__item list__item--head">
+            <div class="list__main">
+              <div class="list__title">
+                <button class="tree-toggle" type="button" data-toggle-account="${group}"
+                  aria-expanded="${open}" aria-label="إظهار/إخفاء">${open ? "▾" : "▸"}</button>
+                ${escapeHtml(root.name_ar || root.name)}
+              </div>
+              <div class="list__meta num">${escapeHtml(root.code)}</div></div>
+            <div class="list__value num">${money(subtreeBalance(root.id))}</div>
+          </div>
+          ${open ? `<ul class="list">${children.length ? rowsFor(root, 1) : '<li class="list__empty">لا توجد حسابات فرعية</li>'}</ul>` : ""}
+        </div>`;
+    }).join("");
+
+    const view = el(`<div>
+      ${groups || emptyState("🏦", "لا توجد حسابات نقدية", "أضف حساب نقدية أو بنك للبدء")}
+      <div class="action-bar">
+        <button class="btn" data-add-cash>＋ حساب جديد</button>
+        <a class="btn btn--ghost" href="#/ledger">دليل الحسابات</a>
+      </div>
+    </div>`);
+
+    view.querySelectorAll("[data-toggle-account]").forEach((btn) => {
+      btn.onclick = () => {
+        const key = btn.dataset.toggleAccount;
+        const token = ["cash", "bank"].includes(key) ? key : `c${key}`;
+        if (expanded.has(token)) expanded.delete(token);
+        else expanded.add(token);
+        location.hash = `#/accounts?open=${[...expanded].join(",")}`;
+      };
+    });
+    view.querySelector("[data-add-cash]").onclick = () => openAccountSheet(accounts, renderAccounts);
+
+    setScreen(view, { appbar: appbar({ title: "الحسابات النقدية والبنوك" }), tabbar: tabbar() });
   } catch (error) {
     setScreen(emptyState("⚠️", "خطأ", error.message), { tabbar: tabbar() });
   }
+}
+
+/** Add a cash or bank account. It is an asset under 1010 (cash) or 1020 (bank),
+ * which is what makes it appear on the cash screen and in the cash reports. */
+function openAccountSheet(accounts, onDone) {
+  const assets = accounts.filter((a) => a.type === "asset");
+  const roots = [
+    { value: "1010", label: "نقدية" },
+    { value: "1020", label: "بنك" },
+  ].filter((r) => assets.some((a) => a.code === r.value));
+  const parentOptions = assets
+    .filter((a) => /^10\d\d$/.test(a.code))
+    .map((a) => `<option value="${a.id}">${escapeHtml(a.code)} — ${escapeHtml(a.name_ar || a.name)}</option>`)
+    .join("");
+
+  const form = el(`<form novalidate>
+    <div class="field"><label class="field__label">النوع</label>
+      <select class="select" id="acc_kind">
+        ${roots.map((r) => `<option value="${r.value}">${r.label}</option>`).join("")}
+      </select></div>
+    <div class="field"><label class="field__label">الاسم</label>
+      <input class="input" id="acc_name" required placeholder="مثال: خزينة الفرع، بنك مصر" /></div>
+    <div class="field"><label class="field__label">كود الحساب</label>
+      <input class="input num" id="acc_code" placeholder="اتركه فارغاً للتوليد التلقائي" inputmode="numeric" /></div>
+    <div class="field"><label class="field__label">الحساب الأب</label>
+      <select class="select" id="acc_parent">
+        <option value="">حسب النوع (تلقائي)</option>${parentOptions}
+      </select></div>
+    <button class="btn btn--block" type="submit">حفظ الحساب</button>
+  </form>`);
+
+  const close = openSheet("حساب نقدية/بنك جديد", form);
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    const kind = form.querySelector("#acc_kind").value;
+    const name = form.querySelector("#acc_name").value.trim();
+    if (!name) return toast("أدخل اسم الحساب", "error");
+    const chosenParent = form.querySelector("#acc_parent").value;
+    const parent = chosenParent ? Number(chosenParent) : assets.find((a) => a.code === kind)?.id ?? null;
+    // Default the code to the parent's code + a running suffix, so a new bank
+    // account lands next to 1020 as 1021, 1022 … rather than colliding.
+    let code = form.querySelector("#acc_code").value.trim();
+    if (!code) {
+      const siblings = assets.filter((a) => a.parent_id === parent);
+      const base = Number(kind) * 1000;
+      const used = new Set(siblings.map((a) => Number(a.code)).filter(Number.isFinite));
+      let candidate = base + 1;
+      while (used.has(candidate)) candidate += 1;
+      code = String(candidate);
+    }
+    try {
+      await api("/accounts", {
+        method: "POST",
+        body: { code, name, name_ar: name, type: "asset", parent_id: parent, is_group: false },
+      });
+      toast("تم إضافة الحساب", "success");
+      close();
+      await onDone();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  };
 }
 
 // ------------------------------------------------- inventory (items & warehouses)
@@ -2605,6 +2735,131 @@ function buildMemberForm({ memberId, role, isActive = true, onDone }) {
     }
   };
   return form;
+}
+
+// ---------------------------------------------------------------- assistant
+
+/** Quick questions answered from reports the app already computes. There is no
+ * external model here: each button runs a report and formats its figures, so an
+ * answer can never disagree with the report it came from. */
+const ASSISTANT_QUICK = [
+  { key: "sales", label: "إجمالي المبيعات" },
+  { key: "top_item", label: "أكثر صنف مبيعًا" },
+  { key: "balance", label: "رصيد عميل" },
+  { key: "work_order", label: "تكلفة أمر إنتاج" },
+];
+
+async function renderAssistant(answer = null) {
+  const view = el(`<div>
+    <div class="card">
+      <div class="card__head"><h2 class="card__title">أسئلة سريعة</h2></div>
+      <div class="assistant__quick">
+        ${ASSISTANT_QUICK.map((q) => `<button class="btn btn--ghost btn--sm" data-ask="${q.key}">${q.label}</button>`).join("")}
+      </div>
+      <div class="field" style="margin-top:12px">
+        <label class="field__label" for="assistant-q">اكتب سؤالك</label>
+        <textarea class="input" id="assistant-q" rows="3" placeholder="مثال: ما رصيد العميل؟"></textarea>
+      </div>
+      <button class="btn btn--block" data-ask="free">اسأل</button>
+    </div>
+    <div id="assistant-answer">${answer || ""}</div>
+  </div>`);
+
+  const answerBox = view.querySelector("#assistant-answer");
+  const ask = async (key) => {
+    answerBox.innerHTML = spinner();
+    try {
+      answerBox.innerHTML = await answerQuestion(key, view.querySelector("#assistant-q").value);
+    } catch (error) {
+      answerBox.innerHTML = `<div class="card"><div class="list__meta">تعذّر الحصول على الإجابة: ${escapeHtml(error.message)}</div></div>`;
+    }
+  };
+  view.querySelectorAll("[data-ask]").forEach((btn) => {
+    btn.onclick = () => ask(btn.dataset.ask);
+  });
+
+  setScreen(view, { appbar: appbar({ title: "مساعد بيانات الشركة" }), tabbar: tabbar() });
+}
+
+function answerCard(title, body) {
+  return `<div class="card"><div class="card__head"><h2 class="card__title">${escapeHtml(title)}</h2></div>${body}</div>`;
+}
+
+function answerRow(label, value) {
+  return `<div class="assistant__row"><span>${escapeHtml(label)}</span><strong class="num">${value}</strong></div>`;
+}
+
+/** Answer one question by running the report that owns the figure. The free
+ * question is routed by keywords, because a real language model is out of scope
+ * and a wrong guess is worse than a clear "not understood". */
+async function answerQuestion(key, text = "") {
+  const period = `من ${date("2026-01-01")} إلى ${date(today())}`;
+  if (key === "free") {
+    const q = text.trim();
+    if (!q) return answerCard("اسأل", '<div class="list__meta">اكتب سؤالاً أولاً.</div>');
+    if (/مبيعات|بيع/.test(q)) key = "sales";
+    else if (/صنف|منتج/.test(q)) key = "top_item";
+    else if (/رصيد|عميل|مديون/.test(q)) key = "balance";
+    else if (/إنتاج|أمر/.test(q)) key = "work_order";
+    else return answerCard("لم أفهم السؤال", '<div class="list__meta">جرّب: إجمالي المبيعات، أكثر صنف مبيعًا، رصيد عميل، تكلفة أمر إنتاج.</div>');
+  }
+
+  if (key === "sales") {
+    const data = await api("/reports/sales-summary");
+    return answerCard(
+      "إجمالي المبيعات",
+      answerRow("صافي المبيعات", money(data.net)) +
+        answerRow("عدد الفواتير", Number(data.invoice_count).toLocaleString("en-US")) +
+        answerRow("متوسط الفاتورة", money(data.average_invoice)) +
+        `<div class="list__meta" style="margin-top:8px">${period}</div>`
+    );
+  }
+
+  if (key === "top_item") {
+    const data = await api("/reports/item-profitability");
+    const top = (data.items || [])[0];
+    if (!top) return answerCard("أكثر صنف مبيعًا", '<div class="list__meta">لا توجد مبيعات مسجّلة بعد.</div>');
+    return answerCard(
+      "أكثر صنف مبيعًا",
+      answerRow("الصنف", escapeHtml(top.item_name_ar || top.item_name)) +
+        answerRow("الكمية", Number(top.quantity).toLocaleString("en-US")) +
+        answerRow("الإيراد", money(top.revenue)) +
+        answerRow("الربح", money(top.profit))
+    );
+  }
+
+  if (key === "balance") {
+    const data = await api("/reports/customer-balances");
+    const rows = (data.contacts || []).slice(0, 5);
+    if (!rows.length) return answerCard("أرصدة العملاء", '<div class="list__meta">لا توجد أرصدة مستحقة.</div>');
+    return answerCard(
+      "أرصدة العملاء",
+      rows.map((c) => answerRow(c.name, money(c.balance))).join("") +
+        answerRow("الإجمالي", money(data.total))
+    );
+  }
+
+  if (key === "work_order") {
+    const orders = await api("/production/work-orders");
+    if (!orders.length) return answerCard("تكلفة أوامر الإنتاج", '<div class="list__meta">لا توجد أوامر إنتاج.</div>');
+    const STATUS = { planned: "مخطّط", in_progress: "قيد التنفيذ", completed: "مكتمل", cancelled: "ملغي" };
+    // Cost per unit times produced quantity is the order's cost, because the
+    // service only finalises unit_cost when it receives the finished goods.
+    return answerCard(
+      "تكلفة أوامر الإنتاج",
+      orders
+        .slice(0, 5)
+        .map((o) =>
+          answerRow(
+            `${o.number} — ${STATUS[o.status] || o.status}`,
+            money(Number(o.unit_cost) * Number(o.produced_quantity || o.quantity))
+          )
+        )
+        .join("")
+    );
+  }
+
+  return answerCard("اسأل", '<div class="list__meta">اختر سؤالاً سريعاً أو اكتب سؤالك.</div>');
 }
 
 // ---------------------------------------------------------------- timeline (audit trail)
@@ -2956,6 +3211,8 @@ function route() {
       return renderTeam();
     case "timeline":
       return renderTimeline();
+    case "assistant":
+      return renderAssistant();
     default:
       location.hash = "#/dashboard";
   }

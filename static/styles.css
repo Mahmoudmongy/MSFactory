@@ -658,3 +658,25 @@ td.num, th.num { text-align: left; }
 .statement-table tr.statement-subtotal td { font-weight: 700; border-top: 1px solid var(--ink-200); }
 .statement-table tr.statement-final td { font-weight: 800; background: var(--brand-50); }
 .nowrap { white-space: nowrap; }
+
+/* ---------- Tree (chart of accounts, cash & bank) ---------- */
+.tree-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; margin-inline-end: 6px; padding: 0;
+  background: transparent; border: 0; border-radius: 6px;
+  color: var(--ink-500); font-size: 0.9rem; cursor: pointer; vertical-align: middle;
+}
+.tree-toggle:hover { background: var(--brand-50); color: var(--brand-700); }
+.tree-toggle--empty { visibility: hidden; }
+.list__item--head { background: var(--ink-50); font-weight: 800; }
+.list__item--head .list__title { font-weight: 800; }
+.list__empty { padding: 14px 16px; color: var(--ink-500); font-size: 0.85rem; text-align: center; }
+
+/* ---------- Assistant ---------- */
+.assistant__quick { display: flex; flex-wrap: wrap; gap: 8px; }
+.assistant__row {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+  padding: 10px 0; border-block-end: 1px solid var(--ink-100);
+}
+.assistant__row:last-child { border-block-end: 0; }
+.assistant__row strong { color: var(--brand-700); }
