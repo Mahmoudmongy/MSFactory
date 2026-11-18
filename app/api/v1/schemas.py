@@ -133,6 +133,15 @@ class InvoiceCreate(BaseModel):
     lines: list[InvoiceLineIn] = Field(min_length=1)
 
 
+class InvoiceUpdate(BaseModel):
+    kind: str | None = None
+    contact_id: int | None = None
+    issue_date: date | None = None
+    due_date: date | None = None
+    notes: str | None = None
+    lines: list[InvoiceLineIn] | None = None
+
+
 class InvoiceLineOut(ORMModel):
     id: int
     description: str
@@ -488,3 +497,83 @@ class InventorySummary(BaseModel):
     item_count: int
     warehouse_count: int
     costing_method: str
+
+
+# --- production (work orders) ---
+class WorkOrderMaterialIn(BaseModel):
+    item_id: int
+    variant_id: int | None = None
+    quantity: Decimal = Decimal("0")
+    notes: str = ""
+
+
+class WorkOrderMaterialOut(ORMModel):
+    id: int
+    item_id: int
+    variant_id: int | None = None
+    quantity: Decimal
+    cost_amount: Decimal
+    notes: str
+
+
+class WorkOrderCreate(BaseModel):
+    item_id: int
+    quantity: Decimal = Decimal("1")
+    start_date: date
+    warehouse_id: int | None = None
+    variant_id: int | None = None
+    due_date: date | None = None
+    notes: str = ""
+    status: str = "draft"
+    materials: list[WorkOrderMaterialIn] = Field(default_factory=list)
+
+
+class WorkOrderComplete(BaseModel):
+    produced_quantity: Decimal | None = None
+
+
+class WorkOrderCancel(BaseModel):
+    reason: str = ""
+
+
+class WorkOrderOut(ORMModel):
+    id: int
+    number: str
+    status: str
+    item_id: int
+    variant_id: int | None = None
+    warehouse_id: int
+    quantity: Decimal
+    produced_quantity: Decimal
+    start_date: date
+    due_date: date | None
+    notes: str
+    material_cost: Decimal
+    unit_cost: Decimal
+    materials: list[WorkOrderMaterialOut] = []
+
+
+# --- team ---
+class TeamMemberCreate(BaseModel):
+    email: EmailStr
+    role: str = "viewer"
+    full_name: str = ""
+    password: str | None = None
+
+
+class TeamMemberRoleUpdate(BaseModel):
+    role: str
+
+
+class TeamMemberOut(BaseModel):
+    id: int
+    user_id: int
+    email: str
+    full_name: str
+    role: str
+    is_active: bool
+
+
+class RoleOut(BaseModel):
+    value: str
+    label: str

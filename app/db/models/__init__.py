@@ -23,6 +23,7 @@ from .inventory import (
     INVENTORY_CODE,
     ITEM_TYPES,
     MOVEMENT_KINDS,
+    WIP_CODE,
     Item,
     ItemGroup,
     ItemVariant,
@@ -41,6 +42,11 @@ from .operations import (
     PaymentAllocation,
     TaxCode,
 )
+from .production import (
+    WORK_ORDER_STATUSES,
+    WorkOrder,
+    WorkOrderMaterial,
+)
 
 __all__ = [
     "ACCOUNT_TYPES",
@@ -57,6 +63,8 @@ __all__ = [
     "SALES_CODE",
     "VAT_PAYABLE_CODE",
     "VAT_RECEIVABLE_CODE",
+    "WIP_CODE",
+    "WORK_ORDER_STATUSES",
     "Account",
     "AuditLog",
     "Company",
@@ -83,4 +91,6 @@ __all__ = [
     "UnitOfMeasure",
     "User",
     "Warehouse",
+    "WorkOrder",
+    "WorkOrderMaterial",
 ]

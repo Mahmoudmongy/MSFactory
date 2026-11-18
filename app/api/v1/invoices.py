@@ -9,7 +9,7 @@ from ...db.session import get_session
 from ...services.invoices import InvoiceService
 from ..v1.deps import Principal, require
 from ..v1.idempotency import replay_or_execute
-from ..v1.schemas import InvoiceCreate, InvoiceOut, VoidRequest
+from ..v1.schemas import InvoiceCreate, InvoiceOut, InvoiceUpdate, VoidRequest
 
 router = APIRouter(prefix="/invoices", tags=["invoices"])
 
@@ -54,6 +54,37 @@ def create_invoice(
         return InvoiceOut.model_validate(invoice)
 
     return replay_or_execute(db, principal.company_id, idempotency_key, "/invoices", run, InvoiceOut)
+
+
+@router.patch("/{invoice_id}", response_model=InvoiceOut)
+def update_invoice(
+    invoice_id: int,
+    payload: InvoiceUpdate,
+    principal: Principal = Depends(require(Permission.INVOICE_MANAGE)),
+    db: Session = Depends(get_session),
+):
+    invoice = InvoiceService(db, principal.company_id, principal.user.id).update(
+        invoice_id,
+        kind=payload.kind,
+        contact_id=payload.contact_id,
+        issue_date=payload.issue_date,
+        due_date=payload.due_date,
+        lines=[line.model_dump() for line in payload.lines] if payload.lines is not None else None,
+        notes=payload.notes,
+    )
+    db.commit()
+    return InvoiceOut.model_validate(invoice)
+
+
+@router.post("/{invoice_id}/issue", response_model=InvoiceOut)
+def issue_invoice(
+    invoice_id: int,
+    principal: Principal = Depends(require(Permission.INVOICE_MANAGE)),
+    db: Session = Depends(get_session),
+):
+    invoice = InvoiceService(db, principal.company_id, principal.user.id).issue(invoice_id)
+    db.commit()
+    return InvoiceOut.model_validate(invoice)
 
 
 @router.post("/{invoice_id}/void", response_model=InvoiceOut)

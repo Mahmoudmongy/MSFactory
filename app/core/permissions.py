@@ -31,6 +31,8 @@ class Permission(StrEnum):
     WAREHOUSE_MANAGE = "warehouse:manage"
     STOCK_VIEW = "stock:view"
     STOCK_MANAGE = "stock:manage"
+    PRODUCTION_VIEW = "production:view"
+    PRODUCTION_MANAGE = "production:manage"
     INVOICE_VIEW = "invoice:view"
     INVOICE_MANAGE = "invoice:manage"
     PAYMENT_VIEW = "payment:view"
@@ -56,6 +58,8 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
         Permission.WAREHOUSE_MANAGE,
         Permission.STOCK_VIEW,
         Permission.STOCK_MANAGE,
+        Permission.PRODUCTION_VIEW,
+        Permission.PRODUCTION_MANAGE,
         Permission.INVOICE_VIEW,
         Permission.INVOICE_MANAGE,
         Permission.PAYMENT_VIEW,
@@ -81,6 +85,8 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
         Permission.WAREHOUSE_MANAGE,
         Permission.STOCK_VIEW,
         Permission.STOCK_MANAGE,
+        Permission.PRODUCTION_VIEW,
+        Permission.PRODUCTION_MANAGE,
         Permission.CONTACT_VIEW,
         Permission.REPORT_VIEW,
     },
@@ -88,6 +94,7 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
         Permission.CONTACT_VIEW,
         Permission.ITEM_VIEW,
         Permission.STOCK_VIEW,
+        Permission.PRODUCTION_VIEW,
         Permission.INVOICE_VIEW,
         Permission.PAYMENT_VIEW,
         Permission.REPORT_VIEW,

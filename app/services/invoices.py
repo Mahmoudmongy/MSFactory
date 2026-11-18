@@ -137,6 +137,131 @@ class InvoiceService:
         )
         return invoice
 
+    def update(
+        self,
+        invoice_id: int,
+        *,
+        kind: str | None = None,
+        contact_id: int | None = None,
+        issue_date: date | None = None,
+        due_date: date | None = None,
+        lines: list[dict] | None = None,
+        notes: str | None = None,
+    ) -> Invoice:
+        """Edit an invoice, whether it is a draft or already issued.
+
+        A draft has no accounting footprint, so it is rewritten in place. An
+        issued invoice is an accounting fact: changing it means reversing its
+        journal entry and its stock moves, then posting the new figures, so the
+        books stay balanced and the audit trail keeps both versions. Editing is
+        refused once money has been received against it or if its period is
+        closed — those are corrected with a return or a reversal, not an edit.
+        """
+        invoice = self.invoices.get(invoice_id)
+        if invoice.status == "void":
+            raise ImmutableRecordError("لا يمكن تعديل فاتورة ملغاة")
+        if invoice.status != "draft" and to_money(invoice.amount_paid) > ZERO:
+            raise ImmutableRecordError(
+                "لا يمكن تعديل فاتورة عليها مدفوعات؛ اعمل مرتجعاً أو اعكس الدفعة أولاً"
+            )
+
+        if kind is not None and kind not in ("sales", "purchase"):
+            raise ValidationError("Invoice kind must be sales or purchase")
+        if lines is not None and not lines:
+            raise ValidationError("Invoice needs at least one line")
+
+        was_issued = invoice.status != "draft"
+        if was_issued:
+            # Undo the old fact before writing the new one.
+            if invoice.journal_entry_id:
+                self.accounting.reverse(invoice.journal_entry_id, reason=f"تعديل الفاتورة {invoice.number}")
+                invoice.journal_entry_id = None
+            self._reverse_stock(invoice, reason=f"تعديل الفاتورة {invoice.number}")
+            invoice.status = "draft"
+
+        if contact_id is not None:
+            contact = self.contacts.get(contact_id)
+            invoice.contact_id = contact.id
+            invoice.currency = contact_company_currency(contact, self.company_id)
+        if kind is not None:
+            invoice.kind = kind
+        if issue_date is not None:
+            invoice.issue_date = issue_date
+        if due_date is not None:
+            invoice.due_date = due_date
+        if notes is not None:
+            invoice.notes = notes
+
+        if lines is not None:
+            computed = [
+                compute_line(
+                    line.get("quantity", 1),
+                    line.get("unit_price", 0),
+                    line.get("discount_rate", 0),
+                    line.get("tax_rate", 0),
+                )
+                for line in lines
+            ]
+            totals = summarize(computed)
+            invoice.subtotal = totals["subtotal"]
+            invoice.discount_total = totals["discount_total"]
+            invoice.tax_total = totals["tax_total"]
+            invoice.total = totals["total"]
+            invoice.lines.clear()
+            self.db.flush()
+            for raw in lines:
+                invoice.lines.append(
+                    InvoiceLine(
+                        company_id=self.company_id,
+                        description=raw.get("description", ""),
+                        quantity=raw.get("quantity", 1),
+                        unit_price=raw.get("unit_price", 0),
+                        discount_rate=raw.get("discount_rate", 0),
+                        tax_rate=raw.get("tax_rate", 0),
+                        account_id=raw.get("account_id"),
+                        item_id=raw.get("item_id"),
+                        variant_id=raw.get("variant_id"),
+                        warehouse_id=raw.get("warehouse_id"),
+                    )
+                )
+        self.db.flush()
+
+        if was_issued:
+            self._reissue(invoice)
+
+        self.audit.record(
+            action="invoice.update",
+            entity_type="invoice",
+            entity_id=invoice.id,
+            user_id=self.user_id,
+            summary=f"Updated {invoice.kind} invoice {invoice.number}",
+        )
+        self.db.flush()
+        return invoice
+
+    def issue(self, invoice_id: int) -> Invoice:
+        """Turn a draft into an accounting fact (post journal + move stock)."""
+        invoice = self.invoices.get(invoice_id)
+        if invoice.status != "draft":
+            raise ValidationError("الفاتورة مُصدَرة بالفعل")
+        self._reissue(invoice)
+        self.audit.record(
+            action="invoice.issue",
+            entity_type="invoice",
+            entity_id=invoice.id,
+            user_id=self.user_id,
+            summary=f"Issued invoice {invoice.number}",
+        )
+        self.db.flush()
+        return invoice
+
+    def _reissue(self, invoice: Invoice) -> None:
+        invoice.status = "issued"
+        invoice.issued_at = utcnow()
+        self._move_stock(invoice)
+        self._post(invoice)
+        self.db.flush()
+
     def void(self, invoice_id: int, reason: str = "") -> Invoice:
         invoice = self.invoices.get(invoice_id)
         if invoice.status == "void":

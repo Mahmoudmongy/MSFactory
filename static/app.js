@@ -268,6 +268,7 @@ const TABS = [
   { href: "#/dashboard", icon: "🏠", label: "الرئيسية" },
   { href: "#/invoices", icon: "🧾", label: "الفواتير" },
   { href: "#/payments", icon: "💵", label: "المدفوعات" },
+  { href: "#/production", icon: "🏭", label: "الإنتاج" },
   { href: "#/contacts", icon: "👥", label: "العملاء" },
   { href: "#/reports", icon: "📊", label: "التقارير" },
 ];
@@ -482,9 +483,24 @@ async function renderInvoices() {
   }
 }
 
-async function renderInvoiceForm() {
+async function renderInvoiceForm({ invoiceId } = {}) {
+  const editing = Boolean(invoiceId);
+  let existing = null;
+  if (editing) {
+    existing = await api(`/invoices/${invoiceId}`);
+  }
   const [accounts, contacts] = await Promise.all([loadAccounts(), loadContacts()]);
   const customers = contacts.filter((c) => c.kind === "customer");
+  let items = [];
+  let warehouses = [];
+  try {
+    const options = await loadInventoryOptions();
+    items = options.items;
+    warehouses = options.warehouses;
+  } catch {
+    items = [];
+    warehouses = [];
+  }
 
   // Tax rates come from the company's own tax codes, so changing VAT is a
   // settings edit — not a code change.
@@ -545,21 +561,46 @@ async function renderInvoiceForm() {
   let kind = "sales";
   const linesHost = view.querySelector("#lines");
 
-  function addLine(focus = false) {
+  function addLine(prefill = null) {
     const node = el(`<div class="line-editor">
       <div class="line-editor__head"><span>بند</span>
         <button type="button" class="btn btn--ghost btn--sm" data-remove>حذف</button></div>
       <div class="field"><label class="field__label">الوصف</label>
-        <input class="input" data-description placeholder="وصف البند" /></div>
+        <input class="input" data-description placeholder="وصف البند" value="${escapeHtml(prefill?.description || "")}" /></div>
+      ${items.length
+        ? `<div class="line-editor__row">
+        <div class="field"><label class="field__label">الصنف (يحرّك المخزون)</label>
+          <select class="select" data-item>
+            <option value="">— بدون صنف (خدمة) —</option>
+            ${items
+              .map(
+                (i) =>
+                  `<option value="${i.id}" ${prefill?.item_id === i.id ? "selected" : ""}>${escapeHtml(i.name)}</option>`
+              )
+              .join("")}
+          </select></div>
+        <div class="field"><label class="field__label">المخزن</label>
+          <select class="select" data-warehouse>
+            ${warehouses
+              .map(
+                (w) =>
+                  `<option value="${w.id}" ${
+                    prefill?.warehouse_id ? (prefill.warehouse_id === w.id ? "selected" : "") : w.code === "MAIN" ? "selected" : ""
+                  }>${escapeHtml(w.name_ar || w.name)}</option>`
+              )
+              .join("")}
+          </select></div>
+      </div>`
+        : ""}
       <div class="line-editor__row">
         <div class="field"><label class="field__label">الكمية</label>
-          <input class="input num" data-quantity type="number" step="0.01" min="0" value="1" inputmode="decimal" /></div>
+          <input class="input num" data-quantity type="number" step="0.01" min="0" value="${prefill ? Number(prefill.quantity) : 1}" inputmode="decimal" /></div>
         <div class="field"><label class="field__label">سعر الوحدة</label>
-          <input class="input num" data-unit-price type="number" step="0.01" min="0" value="0" inputmode="decimal" /></div>
+          <input class="input num" data-unit-price type="number" step="0.01" min="0" value="${prefill ? Number(prefill.unit_price) : 0}" inputmode="decimal" /></div>
       </div>
       <div class="line-editor__row">
         <div class="field"><label class="field__label">خصم %</label>
-          <input class="input num" data-discount type="number" step="0.01" min="0" max="100" value="0" inputmode="decimal" /></div>
+          <input class="input num" data-discount type="number" step="0.01" min="0" max="100" value="${prefill ? Number(prefill.discount_rate) : 0}" inputmode="decimal" /></div>
         <div class="field"><label class="field__label">ضريبة %</label>
           <select class="select" data-tax-rate>
             ${taxCodes
@@ -578,18 +619,38 @@ async function renderInvoiceForm() {
       recalc();
     };
     node.addEventListener("input", recalc);
+    const itemSelect = node.querySelector("[data-item]");
+    if (itemSelect) {
+      itemSelect.addEventListener("change", () => {
+        const chosen = items.find((i) => i.id === Number(itemSelect.value));
+        const priceField = node.querySelector("[data-unit-price]");
+        const price = kind === "purchase" ? chosen?.purchase_price : chosen?.sale_price;
+        if (chosen && price && Number(price) > 0 && Number(priceField.value) === 0) {
+          priceField.value = Number(price);
+        }
+        recalc();
+      });
+    }
     linesHost.appendChild(node);
-    if (focus) node.querySelector("[data-description]").focus();
+    if (!prefill) node.querySelector("[data-description]").focus();
   }
 
   function collect() {
-    return [...linesHost.querySelectorAll(".line-editor")].map((node) => ({
-      description: node.querySelector("[data-description]").value.trim(),
-      quantity: Number(node.querySelector("[data-quantity]").value) || 0,
-      unit_price: Number(node.querySelector("[data-unit-price]").value) || 0,
-      discount_rate: Number(node.querySelector("[data-discount]").value) || 0,
-      tax_rate: Number(node.querySelector("[data-tax-rate]").value) || 0,
-    }));
+    return [...linesHost.querySelectorAll(".line-editor")].map((node) => {
+      const itemId = node.querySelector("[data-item]")?.value || "";
+      const warehouseId = node.querySelector("[data-warehouse]")?.value || "";
+      return {
+        description: node.querySelector("[data-description]").value.trim(),
+        quantity: Number(node.querySelector("[data-quantity]").value) || 0,
+        unit_price: Number(node.querySelector("[data-unit-price]").value) || 0,
+        discount_rate: Number(node.querySelector("[data-discount]").value) || 0,
+        tax_rate: Number(node.querySelector("[data-tax-rate]").value) || 0,
+        // Naming an item is what moves stock; leaving it blank keeps the line
+        // as free text that touches no inventory.
+        ...(itemId ? { item_id: Number(itemId) } : {}),
+        ...(itemId && warehouseId ? { warehouse_id: Number(warehouseId) } : {}),
+      };
+    });
   }
 
   function recalc() {
@@ -606,7 +667,7 @@ async function renderInvoiceForm() {
     view.querySelector("[data-total]").textContent = money(subtotal + tax);
   }
 
-  view.querySelector("[data-add-line]").onclick = () => addLine(true);
+  view.querySelector("[data-add-line]").onclick = () => addLine();
   view.querySelectorAll("[data-kind]").forEach((button) => {
     button.onclick = () => {
       kind = button.dataset.kind;
@@ -636,23 +697,39 @@ async function renderInvoiceForm() {
     submit.disabled = true;
     submit.textContent = "جارٍ الحفظ...";
     try {
-      const invoice = await api("/invoices", {
-        method: "POST",
-        body: payload,
-        headers: { "Idempotency-Key": idempotencyKey("inv", payload) },
-      });
-      toast(`تم حفظ الفاتورة ${invoice.number}`, "success");
+      const invoice = editing
+        ? await api(`/invoices/${invoiceId}`, { method: "PATCH", body: payload })
+        : await api("/invoices", {
+            method: "POST",
+            body: payload,
+            headers: { "Idempotency-Key": idempotencyKey("inv", payload) },
+          });
+      toast(editing ? "تم تحديث الفاتورة" : `تم حفظ الفاتورة ${invoice.number}`, "success");
       location.hash = `#/invoices/${invoice.id}`;
     } catch (error) {
       toast(error.message, "error");
       submit.disabled = false;
-      submit.textContent = "حفظ الفاتورة";
+      submit.textContent = editing ? "حفظ التعديلات" : "حفظ الفاتورة";
     }
   };
 
-  addLine();
+  if (existing) {
+    kind = existing.kind;
+    view.querySelectorAll("[data-kind]").forEach((b) =>
+      b.setAttribute("aria-pressed", String(b.dataset.kind === kind))
+    );
+    view.querySelector("#contact").value = String(existing.contact_id);
+    view.querySelector("#issue_date").value = String(existing.issue_date).slice(0, 10);
+    view.querySelector("#due_date").value = existing.due_date ? String(existing.due_date).slice(0, 10) : "";
+    view.querySelector("#notes").value = existing.notes || "";
+    existing.lines.forEach((line) => addLine(line));
+  } else {
+    addLine();
+  }
   recalc();
-  setScreen(view, { appbar: appbar({ title: "فاتورة جديدة", back: "#/invoices" }) });
+  setScreen(view, {
+    appbar: appbar({ title: editing ? "تعديل الفاتورة" : "فاتورة جديدة", back: "#/invoices" }),
+  });
 }
 
 async function renderInvoiceDetail(invoiceId) {
@@ -706,10 +783,16 @@ async function renderInvoiceDetail(invoiceId) {
       <div class="row-actions">
         ${invoice.status !== "void" && outstanding > 0 && store.can("payment.manage")
           ? '<button class="btn" data-pay>💵 تسجيل دفعة</button>' : ""}
+        ${invoice.status !== "void" && Number(invoice.amount_paid) === 0 && store.can("invoice.manage")
+          ? '<button class="btn btn--ghost" data-edit>✎ تعديل الفاتورة</button>' : ""}
         ${invoice.status !== "void" && store.can("invoice.manage")
           ? '<button class="btn btn--danger" data-void>إلغاء الفاتورة</button>' : ""}
       </div>
     </div>`);
+
+    view.querySelector("[data-edit]")?.addEventListener("click", () => {
+      location.hash = `#/invoices/${invoiceId}/edit`;
+    });
 
     const payButton = view.querySelector("[data-pay]");
     if (payButton) {
@@ -747,6 +830,242 @@ async function renderInvoiceDetail(invoiceId) {
     setScreen(view, { appbar: appbar({ title: invoice.number, back: "#/invoices" }) });
   } catch (error) {
     setScreen(emptyState("⚠️", "تعذّر تحميل الفاتورة", error.message), { tabbar: tabbar() });
+  }
+}
+
+// ---------------------------------------------------------------- production
+
+const WORK_ORDER_LABELS = {
+  draft: "مسودة",
+  in_progress: "قيد التنفيذ",
+  completed: "مكتمل",
+  cancelled: "ملغى",
+};
+const workOrderLabel = (status) => WORK_ORDER_LABELS[status] || status;
+
+async function loadInventoryOptions() {
+  const [items, warehouses] = await Promise.all([
+    api("/inventory/items"),
+    api("/inventory/warehouses"),
+  ]);
+  return {
+    items: items.filter((i) => i.track_inventory),
+    warehouses: warehouses.filter((w) => !w.is_group),
+  };
+}
+
+async function renderProduction() {
+  setScreen(spinner(), { appbar: appbar({ title: "الإنتاج" }), tabbar: tabbar() });
+  try {
+    const orders = await api("/production/work-orders");
+    const rows = orders
+      .map(
+        (order) => `<li><a class="list__item" href="#/production/${order.id}">
+        <div class="list__main">
+          <div class="list__title">${escapeHtml(order.number)}</div>
+          <div class="list__meta">الكمية ${Number(order.quantity)} · ${date(order.start_date)}</div>
+        </div>
+        <div style="text-align:end">
+          <div class="list__value num">${money(order.material_cost)}</div>
+          <div style="margin-top:4px"><span class="badge">${escapeHtml(workOrderLabel(order.status))}</span></div>
+        </div></a></li>`
+      )
+      .join("");
+
+    setScreen(
+      el(`<div>
+        <div class="card card--flush">
+          ${orders.length ? `<ul class="list">${rows}</ul>` : emptyState("🏭", "لا توجد أوامر إنتاج", "أنشئ أمر إنتاج لتحويل الخامات إلى منتج تام")}
+        </div>
+        <div class="action-bar"><a class="btn" href="#/production/new">＋ أمر إنتاج</a></div>
+      </div>`),
+      { appbar: appbar({ title: "الإنتاج" }), tabbar: tabbar() }
+    );
+  } catch (error) {
+    setScreen(emptyState("⚠️", "خطأ", error.message), { tabbar: tabbar() });
+  }
+}
+
+async function renderWorkOrderForm() {
+  setScreen(spinner(), { appbar: appbar({ title: "أمر إنتاج", back: "#/production" }) });
+  try {
+    const { items, warehouses } = await loadInventoryOptions();
+    const manufactured = items.filter((i) => ["manufactured", "both"].includes(i.item_type));
+
+    const view = el(`<form novalidate>
+      <div class="card">
+        <div class="field"><label class="field__label" for="item">المنتج التام</label>
+          <select class="select" id="item" required>
+            <option value="">— اختر —</option>
+            ${manufactured
+              .map((i) => `<option value="${i.id}">${escapeHtml(i.name)}</option>`)
+              .join("")}
+          </select>
+          ${manufactured.length ? "" : '<div class="field__hint">لا يوجد منتج نوعه "مصنّع" — أضفه من المخزون أولاً</div>'}
+        </div>
+        <div class="line-editor__row">
+          <div class="field"><label class="field__label" for="quantity">الكمية المطلوبة</label>
+            <input class="input num" id="quantity" type="number" step="0.01" min="0.01" value="1" inputmode="decimal" required /></div>
+          <div class="field"><label class="field__label" for="warehouse">مخزن الاستلام</label>
+            <select class="select" id="warehouse">
+              ${warehouses
+                .map((w) => `<option value="${w.id}" ${w.code === "FG" ? "selected" : ""}>${escapeHtml(w.name_ar || w.name)}</option>`)
+                .join("")}
+            </select></div>
+        </div>
+        <div class="line-editor__row">
+          <div class="field"><label class="field__label" for="start_date">تاريخ البدء</label>
+            <input class="input" type="date" id="start_date" value="${today()}" required /></div>
+          <div class="field"><label class="field__label" for="due_date">تاريخ الاستحقاق</label>
+            <input class="input" type="date" id="due_date" /></div>
+        </div>
+      </div>
+
+      <div class="section-title">الخامات المستخدمة</div>
+      <div id="materials"></div>
+      <button type="button" class="btn btn--ghost btn--block" data-add-material>＋ إضافة خامة</button>
+
+      <div class="field" style="margin-top:12px"><label class="field__label" for="notes">ملاحظات</label>
+        <textarea class="textarea" id="notes" placeholder="اختياري"></textarea></div>
+
+      <div class="action-bar">
+        <button class="btn" type="submit">حفظ أمر الإنتاج</button>
+        <button class="btn btn--ghost" type="button" data-nav="#/production">إلغاء</button>
+      </div>
+    </form>`);
+
+    const host = view.querySelector("#materials");
+    function addMaterial() {
+      const node = el(`<div class="line-editor">
+        <div class="line-editor__head"><span>خامة</span>
+          <button type="button" class="btn btn--ghost btn--sm" data-remove>حذف</button></div>
+        <div class="line-editor__row">
+          <div class="field"><label class="field__label">الصنف</label>
+            <select class="select" data-material-item>
+              ${items.map((i) => `<option value="${i.id}">${escapeHtml(i.name)}</option>`).join("")}
+            </select></div>
+          <div class="field"><label class="field__label">الكمية</label>
+            <input class="input num" data-material-qty type="number" step="0.01" min="0" value="1" inputmode="decimal" /></div>
+        </div>
+      </div>`);
+      node.querySelector("[data-remove]").onclick = () => node.remove();
+      host.appendChild(node);
+    }
+    view.querySelector("[data-add-material]").onclick = addMaterial;
+
+    view.onsubmit = async (event) => {
+      event.preventDefault();
+      const submit = view.querySelector("button[type=submit]");
+      const itemId = Number(view.querySelector("#item").value);
+      const materials = [...host.querySelectorAll(".line-editor")].map((node) => ({
+        item_id: Number(node.querySelector("[data-material-item]").value),
+        quantity: Number(node.querySelector("[data-material-qty]").value) || 0,
+      }));
+      if (!itemId) return toast("اختر المنتج التام", "error");
+      if (!materials.length) return toast("أضف خامة واحدة على الأقل", "error");
+
+      const payload = {
+        item_id: itemId,
+        quantity: Number(view.querySelector("#quantity").value) || 0,
+        start_date: view.querySelector("#start_date").value,
+        due_date: view.querySelector("#due_date").value || null,
+        warehouse_id: Number(view.querySelector("#warehouse").value) || null,
+        notes: view.querySelector("#notes").value.trim(),
+        materials,
+      };
+      submit.disabled = true;
+      submit.textContent = "جارٍ الحفظ...";
+      try {
+        const order = await api("/production/work-orders", {
+          method: "POST",
+          body: payload,
+          headers: { "Idempotency-Key": idempotencyKey("wo", payload) },
+        });
+        toast(`تم إنشاء الأمر ${order.number}`, "success");
+        location.hash = `#/production/${order.id}`;
+      } catch (error) {
+        toast(error.message, "error");
+        submit.disabled = false;
+        submit.textContent = "حفظ أمر الإنتاج";
+      }
+    };
+
+    addMaterial();
+    setScreen(view, { appbar: appbar({ title: "أمر إنتاج جديد", back: "#/production" }) });
+  } catch (error) {
+    setScreen(emptyState("⚠️", "خطأ", error.message), { tabbar: tabbar() });
+  }
+}
+
+async function renderWorkOrderDetail(orderId) {
+  setScreen(spinner(), { appbar: appbar({ title: "أمر إنتاج", back: "#/production" }) });
+  try {
+    const order = await api(`/production/work-orders/${orderId}`);
+    const { items } = await loadInventoryOptions();
+    const name = (id) => items.find((i) => i.id === id)?.name || `#${id}`;
+
+    const view = el(`<div>
+      <div class="card">
+        <div class="card__head">
+          <div><h2 class="card__title">${escapeHtml(order.number)}</h2>
+            <div class="list__meta">${escapeHtml(name(order.item_id))}</div></div>
+          <span class="badge">${escapeHtml(workOrderLabel(order.status))}</span>
+        </div>
+        <div class="totals__row"><span>الكمية المطلوبة</span><span class="num">${Number(order.quantity)}</span></div>
+        <div class="totals__row"><span>الكمية المنتجة</span><span class="num">${Number(order.produced_quantity)}</span></div>
+        <div class="totals__row"><span>تكلفة الخامات</span><span class="num">${money(order.material_cost)}</span></div>
+        <div class="totals__row totals__row--grand"><span>تكلفة الوحدة</span><span class="num">${money(order.unit_cost)}</span></div>
+      </div>
+
+      <div class="section-title">الخامات</div>
+      <div class="card card--flush table-wrap">
+        <table>
+          <thead><tr><th>الصنف</th><th class="num">الكمية</th><th class="num">التكلفة</th></tr></thead>
+          <tbody>${order.materials
+            .map(
+              (m) => `<tr><td>${escapeHtml(name(m.item_id))}</td>
+                <td class="num">${Number(m.quantity)}</td>
+                <td class="num">${money(m.cost_amount)}</td></tr>`
+            )
+            .join("")}</tbody>
+        </table>
+      </div>
+
+      ${order.notes ? `<div class="card"><div class="card__title">ملاحظات</div>
+        <p style="margin:8px 0 0;color:var(--ink-700)">${escapeHtml(order.notes)}</p></div>` : ""}
+
+      <div class="row-actions">
+        ${order.status === "draft" && store.can("production.manage")
+          ? '<button class="btn" data-start>▶ بدء التنفيذ</button>' : ""}
+        ${["draft", "in_progress"].includes(order.status) && store.can("production.manage")
+          ? '<button class="btn" data-complete>✔ إتمام الإنتاج</button>' : ""}
+        ${["draft", "in_progress"].includes(order.status) && store.can("production.manage")
+          ? '<button class="btn btn--danger" data-cancel>إلغاء الأمر</button>' : ""}
+      </div>
+    </div>`);
+
+    const act = async (path, body, message) => {
+      try {
+        await api(`/production/work-orders/${orderId}/${path}`, { method: "POST", body });
+        toast(message, "success");
+        renderWorkOrderDetail(orderId);
+      } catch (error) {
+        toast(error.message, "error");
+      }
+    };
+    view.querySelector("[data-start]")?.addEventListener("click", () => act("start", {}, "بدأ التنفيذ"));
+    view.querySelector("[data-complete]")?.addEventListener("click", () =>
+      act("complete", { produced_quantity: Number(order.quantity) }, "تم إتمام الإنتاج")
+    );
+    view.querySelector("[data-cancel]")?.addEventListener("click", async () => {
+      if (await confirmDialog("سيتم إرجاع الخامات إلى المخزن وإلغاء الأمر. متابعة؟")) {
+        act("cancel", { reason: "إلغاء من التطبيق" }, "تم إلغاء الأمر");
+      }
+    });
+
+    setScreen(view, { appbar: appbar({ title: order.number, back: "#/production" }) });
+  } catch (error) {
+    setScreen(emptyState("⚠️", "تعذّر تحميل الأمر", error.message), { tabbar: tabbar() });
   }
 }
 
@@ -1021,108 +1340,378 @@ async function renderContactDetail(contactId) {
 
 // ---------------------------------------------------------------- reports
 
-const REPORTS = [
-  { key: "income-statement", label: "قائمة الدخل", icon: "📈" },
-  { key: "balance-sheet", label: "الميزانية العمومية", icon: "⚖️" },
-  { key: "trial-balance", label: "ميزان المراجعة", icon: "📋" },
-  { key: "ar-aging", label: "أعمار الديون", icon: "⏳" },
-];
+/* The report catalogue comes from the API, so this menu cannot drift from the
+ * endpoints that exist: a report is listed because the server says it is there.
+ * Each report declares the filters it accepts, and one generic renderer shows
+ * whatever shape the report returns — a block of totals, tables of rows, or
+ * both — so a report added on the server needs no new code here.
+ *
+ * Every report can be downloaded as a real .xlsx, built server-side from the
+ * same figures on screen. */
 
-async function renderReports() {
-  setScreen(
-    el(`<div>
-      <div class="card card--flush">
-        <ul class="list">
-          ${REPORTS.map(
-            (report) => `<li><a class="list__item" href="#/reports/${report.key}">
-              <span style="font-size:1.4rem">${report.icon}</span>
-              <div class="list__main"><div class="list__title">${report.label}</div></div>
-              <span style="color:var(--ink-400)">‹</span></a></li>`
-          ).join("")}
-        </ul>
-      </div>
-      <div class="section-title">الدفتر اليومي</div>
-      <div class="card card--flush">
-        <ul class="list"><li><a class="list__item" href="#/journal">
-          <span style="font-size:1.4rem">📒</span>
-          <div class="list__main"><div class="list__title">القيود المحاسبية</div>
-            <div class="list__meta">عرض وإضافة قيود يدوية</div></div>
-          <span style="color:var(--ink-400)">‹</span></a></li></ul>
-      </div>
-    </div>`),
-    { appbar: appbar({ title: "التقارير" }), tabbar: tabbar() }
-  );
+const COLUMN_LABELS = {
+  code: "الكود", name: "الاسم", name_ar: "الاسم", account: "الحساب", account_id: "الحساب",
+  type: "النوع", debit: "مدين", credit: "دائن", balance: "الرصيد", amount: "المبلغ",
+  total: "الإجمالي", date: "التاريخ", entry_date: "التاريخ", issue_date: "تاريخ الفاتورة",
+  due_date: "تاريخ الاستحقاق", reference: "المرجع", memo: "البيان", number: "الرقم",
+  description: "الوصف", quantity: "الكمية", unit_price: "السعر", unit_cost: "التكلفة",
+  cost: "التكلفة", revenue: "الإيراد", profit: "الربح", margin_percent: "الهامش %",
+  share_percent: "النسبة %", tax: "الضريبة", net: "الصافي", gross: "الإجمالي",
+  discount: "الخصم", contact: "الجهة", contact_id: "الجهة", customer: "العميل",
+  supplier: "المورد", item: "الصنف", item_id: "الصنف", warehouse: "المخزن",
+  status: "الحالة", invoice_count: "عدد الفواتير", count: "العدد", outstanding: "المتبقي",
+  paid: "المدفوع", opening: "الافتتاحي", closing: "الختامي", running_balance: "الرصيد",
+  balance_before: "الرصيد قبل", age_days: "العمر (يوم)", days: "الأيام", bucket: "الفئة",
+  current: "جاري", value: "القيمة", quantity_remaining: "الكمية المتبقية",
+  quantity_received: "الكمية المستلمة", days_overdue: "أيام التأخير", limit: "الحد الأقصى",
+  month: "الشهر", year: "السنة", shortfall: "النقص", reorder_level: "حد الطلب",
+  party: "الجهة", kind: "النوع", source: "المصدر",
+  available: "المتاح", on_hand: "المتاح", tax_total: "إجمالي الضريبة", tax_rate: "نسبة الضريبة",
+  cost_of_sales: "تكلفة المبيعات", gross_profit: "الربح الإجمالي", net_profit: "صافي الربح",
+  total_revenue: "إجمالي الإيرادات", total_expenses: "إجمالي المصروفات",
+  total_cost_of_sales: "إجمالي تكلفة المبيعات", total_assets: "إجمالي الأصول",
+  total_liabilities: "إجمالي الالتزامات", total_equity: "حقوق الملكية",
+  total_debit: "إجمالي المدين", total_credit: "إجمالي الدائن", total_value: "إجمالي القيمة",
+  total_quantity: "إجمالي الكمية", total_in: "إجمالي الوارد", total_out: "إجمالي المنصرف",
+  receivables: "المستحق لك", payables: "المستحق عليك", inventory_value: "قيمة المخزون",
+  cash: "النقدية", output_tax: "ضريبة المخرجات", input_tax: "ضريبة المدخلات",
+  net_payable: "صافي المستحق", overdue_count: "عدد المتأخرات", overdue_total: "إجمالي المتأخرات",
+  balanced: "متوازن", costing_method: "طريقة التكلفة", periods: "الفترات",
+  cost_of_goods_sold: "تكلفة المبيعات", total_purchases: "إجمالي المشتريات",
+  average_invoice: "متوسط الفاتورة", invoices: "الفواتير", lines: "البنود",
+  movements: "الحركات", entries: "القيود", contacts: "الجهات", customers: "العملاء",
+  suppliers: "الموردون", items: "الأصناف", accounts: "الحسابات", rows: "الصفوف",
+  months: "الشهور", bands: "الفئات", buckets: "الفئات", by_type: "حسب النوع",
+  asset_rows: "الأصول", liability_rows: "الالتزامات", equity_rows: "حقوق الملكية",
+  inflows: "التدفقات الداخلة", outflows: "التدفقات الخارجة", net_change: "صافي التغير",
+  discount_total: "إجمالي الخصم", sold_quantity: "الكمية المبيعة",
+};
+
+const REPORT_PARAM_LABELS = {
+  start: "من تاريخ", end: "إلى تاريخ", upto: "حتى تاريخ",
+  as_of: "بتاريخ", days: "عدد الأيام", year: "السنة", limit: "الحد الأقصى",
+};
+
+// A pivot column key is a measure plus a dimension value ("net مبيعات"), so an
+// unknown key is translated token by token before falling back to the raw text.
+const columnLabel = (key) => {
+  if (COLUMN_LABELS[key]) return COLUMN_LABELS[key];
+  const text = String(key).replace(/_/g, " ");
+  const translated = text
+    .split(" ")
+    .map((token) => COLUMN_LABELS[token] || token)
+    .join(" ");
+  return translated;
+};
+const isPercentKey = (key) => /(percent|margin)/.test(key);
+const isDateKey = (key) => /(^|_)(date|received_at|closed_at|as_of)($|_)/.test(key) || key === "date";
+const isMoneyKey = (key) =>
+  /(amount|total|balance|cost|revenue|profit|value|price|tax|debit|credit|discount|paid|outstanding|closing|opening|due|net|gross|cash|receivables|payables|shortfall|spend)/.test(key) &&
+  !isPercentKey(key) && !/(count|quantity|qty|days)/.test(key);
+
+function formatCell(key, value) {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "boolean") return value ? "نعم" : "لا";
+  if (isPercentKey(key)) return `${Number(value).toFixed(2)}%`;
+  if (isMoneyKey(key)) return money(value);
+  if (isDateKey(key)) return date(value);
+  if (typeof value === "number" && !Number.isInteger(value)) return Number(value).toFixed(2);
+  return escapeHtml(String(value));
 }
 
-async function renderReport(key) {
-  setScreen(spinner(), { appbar: appbar({ title: REPORTS.find((r) => r.key === key)?.label || "تقرير", back: "#/reports" }) });
-  try {
-    const data = await api(`/reports/${key}`);
-    let view;
-
-    if (key === "income-statement") {
-      view = el(`<div>
-        <div class="kpi-grid">
-          <div class="kpi kpi--income"><div class="kpi__label">الإيرادات</div><div class="kpi__value num">${money(data.income)}</div></div>
-          <div class="kpi kpi--expense"><div class="kpi__label">المصروفات</div><div class="kpi__value num">${money(data.expense)}</div></div>
-        </div>
-        <div class="card" style="margin-top:12px">
-          <div class="totals__row totals__row--grand"><span>صافي الربح</span><span class="num">${money(data.net_profit)}</span></div>
-        </div></div>`);
-    } else if (key === "balance-sheet") {
-      view = el(`<div>
-        <div class="card">
-          <div class="totals__row"><span>الأصول</span><span class="num">${money(data.assets)}</span></div>
-          <div class="totals__row"><span>الالتزامات</span><span class="num">${money(data.liabilities)}</span></div>
-          <div class="totals__row"><span>رأس المال</span><span class="num">${money(data.equity)}</span></div>
-          <div class="totals__row"><span>الأرباح المحتجزة</span><span class="num">${money(data.net_profit)}</span></div>
-          <div class="totals__row totals__row--grand"><span>إجمالي الالتزامات + حقوق الملكية</span>
-            <span class="num">${money(data.total_liabilities_equity)}</span></div>
-        </div>
-        <div class="card" style="text-align:center;border-inline-start:4px solid var(--${data.balanced ? "ok" : "danger"}-fg)">
-          <strong>${data.balanced ? "✓ الميزانية متوازنة" : "⚠️ الميزانية غير متوازنة"}</strong></div></div>`);
-    } else if (key === "trial-balance") {
-      view = el(`<div class="card card--flush table-wrap">
-        <table><thead><tr><th>الحساب</th><th class="num">مدين</th><th class="num">دائن</th><th class="num">الرصيد</th></tr></thead>
-        <tbody>${data.rows
-          .map(
-            (row) => `<tr><td>${escapeHtml(row.name_ar || row.name)}
-            <div class="list__meta num">${escapeHtml(row.code)}</div></td>
-            <td class="num">${Number(row.debit) ? money(row.debit) : "—"}</td>
-            <td class="num">${Number(row.credit) ? money(row.credit) : "—"}</td>
-            <td class="num">${money(row.balance)}</td></tr>`
-          )
-          .join("")}
-        <tr class="total-row"><td>الإجمالي</td><td class="num">${money(data.total_debit)}</td>
-          <td class="num">${money(data.total_credit)}</td><td></td></tr></tbody></table></div>`);
+/** A row with nested objects collapsed into columns, matching the Excel export. */
+function flattenRow(row) {
+  const flat = {};
+  for (const [key, value] of Object.entries(row)) {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      for (const [inner, innerValue] of Object.entries(value)) flat[`${key} ${inner}`] = innerValue;
+    } else if (Array.isArray(value)) {
+      flat[`${key} count`] = value.length;
     } else {
-      view = el(`<div>
-        <div class="kpi-grid">
-          <div class="kpi"><div class="kpi__label">جاري</div><div class="kpi__value num">${money(data.buckets.current)}</div></div>
-          <div class="kpi"><div class="kpi__label">1–30 يوم</div><div class="kpi__value num">${money(data.buckets["1_30"])}</div></div>
-          <div class="kpi"><div class="kpi__label">31–60 يوم</div><div class="kpi__value num">${money(data.buckets["31_60"])}</div></div>
-          <div class="kpi"><div class="kpi__label">أكثر من 60</div><div class="kpi__value num">${money(data.buckets["60_plus"])}</div></div>
-        </div>
-        <div class="section-title">تفصيل حسب الجهة</div>
-        <div class="card card--flush table-wrap">
-          ${data.contacts.length
-            ? `<table><thead><tr><th>الجهة</th><th class="num">جاري</th><th class="num">1–30</th>
-              <th class="num">31–60</th><th class="num">+60</th><th class="num">الإجمالي</th></tr></thead>
-              <tbody>${data.contacts
-                .map(
-                  (row) => `<tr><td>${escapeHtml(row.name)}</td>
-                  <td class="num">${money(row.current)}</td><td class="num">${money(row["1_30"])}</td>
-                  <td class="num">${money(row["31_60"])}</td><td class="num">${money(row["60_plus"])}</td>
-                  <td class="num"><strong>${money(row.total)}</strong></td></tr>`
-                )
-                .join("")}</tbody></table>`
-            : emptyState("✓", "لا توجد ديون مستحقة", "كل الفواتير محصّلة")}
-        </div></div>`);
+      flat[key] = value;
     }
+  }
+  return flat;
+}
 
-    setScreen(view, { appbar: appbar({ title: REPORTS.find((r) => r.key === key)?.label, back: "#/reports" }) });
+function reportTable(rows) {
+  if (!rows.length) return emptyState("✓", "لا توجد بيانات", "لا شيء لعرضه في هذا القسم");
+  const flat = rows.map(flattenRow);
+  const columns = [];
+  for (const row of flat) for (const key of Object.keys(row)) if (!columns.includes(key)) columns.push(key);
+  const numeric = (key) => (isMoneyKey(key) || isPercentKey(key) ? "num" : "");
+  return `<div class="card card--flush table-wrap"><table>
+    <thead><tr>${columns
+      .map((key) => `<th class="${numeric(key)}">${escapeHtml(columnLabel(key))}</th>`)
+      .join("")}</tr></thead>
+    <tbody>${flat
+      .map(
+        (row) => `<tr>${columns
+          .map((key) => `<td class="${numeric(key)}">${formatCell(key, row[key])}</td>`)
+          .join("")}</tr>`
+      )
+      .join("")}</tbody></table></div>`;
+}
+
+/* The custom (pivot) report: the user picks dimensions and measures from a
+ * fixed list, so nothing they choose can reach the database as SQL. The lists
+ * mirror the server whitelist; an unknown name is rejected there regardless. */
+const PIVOT_DIMENSIONS = [
+  ["party", "الجهة"], ["item", "الصنف"], ["warehouse", "المخزن"],
+  ["month", "الشهر"], ["year", "السنة"], ["kind", "النوع"], ["source", "المصدر"],
+];
+const PIVOT_MEASURES = [
+  ["net", "صافي"], ["cost", "التكلفة"], ["profit", "الربح"],
+  ["quantity", "الكمية"], ["tax", "الضريبة"], ["discount", "الخصم"], ["total", "الإجمالي"],
+];
+
+/** A chip list: tap to toggle, so it works with a thumb on a phone. */
+function pivotChips(target, options, selected) {
+  return `<div class="chips" data-chips="${target}">${options
+    .map(
+      ([key, label]) =>
+        `<button type="button" class="chip${selected.includes(key) ? " chip--on" : ""}"
+          data-value="${key}" aria-pressed="${selected.includes(key)}">${escapeHtml(label)}</button>`
+    )
+    .join("")}</div>`;
+}
+
+function pivotParams(view) {
+  const params = {};
+  for (const target of ["rows", "columns", "values"]) {
+    const chosen = [...view.querySelectorAll(`[data-chips="${target}"] .chip--on`)].map((c) => c.dataset.value);
+    if (chosen.length) params[target] = chosen.join(",");
+  }
+  for (const name of ["start", "end", "kind"]) {
+    const input = view.querySelector(`[data-param="${name}"]`);
+    if (input && input.value) params[name] = input.value;
+  }
+  return params;
+}
+
+function pivotPanel(params) {
+  const rows = (params.rows || "month").split(",").filter(Boolean);
+  const columns = (params.columns || "").split(",").filter(Boolean);
+  const values = (params.values || "net").split(",").filter(Boolean);
+  return `<div class="card">
+    <div class="field"><label class="field__label">الصفوف (اضغط للاختيار)</label>
+      ${pivotChips("rows", PIVOT_DIMENSIONS, rows)}</div>
+    <div class="field"><label class="field__label">الأعمدة (اختياري)</label>
+      ${pivotChips("columns", PIVOT_DIMENSIONS, columns)}</div>
+    <div class="field"><label class="field__label">القيم</label>
+      ${pivotChips("values", PIVOT_MEASURES, values)}</div>
+    <div class="field"><label class="field__label">من تاريخ</label>
+      <input class="input" type="date" data-param="start" value="${escapeHtml(params.start || "")}" /></div>
+    <div class="field"><label class="field__label">إلى تاريخ</label>
+      <input class="input" type="date" data-param="end" value="${escapeHtml(params.end || "")}" /></div>
+    <div class="field"><label class="field__label">نوع الفاتورة</label>
+      <select class="input" data-param="kind">
+        <option value="">الكل</option>
+        <option value="sales"${params.kind === "sales" ? " selected" : ""}>مبيعات</option>
+        <option value="purchase"${params.kind === "purchase" ? " selected" : ""}>مشتريات</option>
+      </select></div>
+    <button class="btn btn--block" type="button" data-run>تشغيل التقرير</button>
+  </div>`;
+}
+
+/** Render any report payload: totals block, then a table per list. */
+function renderReportBody(data) {
+  // Keys starting with "_" describe the report (its dimensions and measures),
+  // not its data, so they are not rendered as tables.
+  const entries = Object.entries(data).filter(([key]) => !key.startsWith("_"));
+  const scalars = entries.filter(([, v]) => v === null || typeof v !== "object");
+  const maps = entries.filter(([, v]) => v && typeof v === "object" && !Array.isArray(v));
+  const tables = entries.filter(([, v]) => Array.isArray(v) && v.some((row) => row && typeof row === "object"));
+  const lists = entries.filter(([, v]) => Array.isArray(v) && v.every((row) => row === null || typeof row !== "object"));
+
+  let html = "";
+  if (scalars.length) {
+    html += `<div class="card">${scalars
+      .map(
+        ([key, value]) => `<div class="totals__row"><span>${escapeHtml(columnLabel(key))}</span>
+          <span class="num">${formatCell(key, value)}</span></div>`
+      )
+      .join("")}</div>`;
+  }
+  for (const [key, value] of maps) {
+    const inner = Object.entries(value).filter(([, v]) => v === null || typeof v !== "object");
+    if (!inner.length) continue;
+    html += `<div class="section-title">${escapeHtml(columnLabel(key))}</div>
+      <div class="card">${inner
+        .map(
+          ([innerKey, innerValue]) => `<div class="totals__row"><span>${escapeHtml(columnLabel(innerKey))}</span>
+            <span class="num">${formatCell(innerKey, innerValue)}</span></div>`
+        )
+        .join("")}</div>`;
+  }
+  for (const [key, value] of tables) {
+    html += `<div class="section-title">${escapeHtml(columnLabel(key))}</div>${reportTable(value)}`;
+  }
+  for (const [key, value] of lists) {
+    if (!value.length) continue;
+    html += `<div class="section-title">${escapeHtml(columnLabel(key))}</div>
+      <div class="card card--flush"><ul class="list">${value
+        .map((item) => `<li class="list__item"><div class="list__main">${formatCell(key, item)}</div></li>`)
+        .join("")}</ul></div>`;
+  }
+  return html || emptyState("✓", "لا توجد بيانات", "لا شيء لعرضه في هذا التقرير");
+}
+
+/** Read the filter inputs into a params object, omitting blanks. */
+function reportParams(view, spec) {
+  const params = {};
+  for (const name of spec.params) {
+    const input = view.querySelector(`[data-param="${name}"]`);
+    if (input && input.value) params[name] = input.value;
+  }
+  return params;
+}
+
+function reportFilterBar(spec) {
+  if (!spec.params.length) return "";
+  const fields = spec.params
+    .map((name) => {
+      const type = ["days", "year", "limit", "warehouse_id"].includes(name) ? "number" : "date";
+      const value = name === "limit" ? 'value="50"' : "";
+      return `<div class="field"><label class="field__label">${escapeHtml(REPORT_PARAM_LABELS[name] || name)}</label>
+        <input class="input" type="${type}" data-param="${escapeHtml(name)}" ${value} /></div>`;
+    })
+    .join("");
+  return `<div class="card">${fields}<button class="btn btn--block" type="button" data-run>تشغيل التقرير</button></div>`;
+}
+
+async function downloadReport(key, params, label) {
+  const query = new URLSearchParams(params).toString();
+  const response = await fetch(`/api/v1/reports/${key}/export.xlsx${query ? `?${query}` : ""}`, {
+    headers: {
+      Authorization: `Bearer ${store.accessToken}`,
+      "X-Company-Id": String(store.companyId),
+    },
+  });
+  if (!response.ok) throw new Error("تعذّر تصدير التقرير");
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${label}.xlsx`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  toast("تم تنزيل ملف Excel", "success");
+}
+
+let reportCatalog = null;
+
+async function loadReportCatalog() {
+  if (!reportCatalog) reportCatalog = await api("/reports/catalog");
+  return reportCatalog;
+}
+
+async function renderReports() {
+  setScreen(spinner(), { appbar: appbar({ title: "التقارير" }), tabbar: tabbar() });
+  try {
+    const catalog = await loadReportCatalog();
+    const view = el(`<div>
+      <div class="field"><input class="input" type="search" id="report-search"
+        placeholder="ابحث عن تقرير…" autocomplete="off" /></div>
+      <div data-categories>${catalog.categories
+        .map(
+          (category) => `<div data-category>
+            <div class="section-title">${escapeHtml(category.label)}</div>
+            <div class="card card--flush"><ul class="list">${category.reports
+              .map(
+                (report) => `<li data-report="${escapeHtml(report.key)}" data-label="${escapeHtml(report.label)}">
+                  <a class="list__item" href="#/reports/${report.key}">
+                    <span style="font-size:1.4rem">${report.icon}</span>
+                    <div class="list__main">
+                      <div class="list__title">${escapeHtml(report.label)}</div>
+                      ${report.description ? `<div class="list__meta">${escapeHtml(report.description)}</div>` : ""}
+                    </div>
+                    <span style="color:var(--ink-400)">‹</span></a></li>`
+              )
+              .join("")}</ul></div></div>`
+        )
+        .join("")}</div>
+      <div class="section-title">الدفتر اليومي</div>
+      <div class="card card--flush"><ul class="list"><li><a class="list__item" href="#/journal">
+        <span style="font-size:1.4rem">📒</span>
+        <div class="list__main"><div class="list__title">القيود المحاسبية</div>
+          <div class="list__meta">عرض وإضافة قيود يدوية</div></div>
+        <span style="color:var(--ink-400)">‹</span></a></li></ul></div>
+    </div>`);
+
+    // A live filter: typing hides reports whose name does not match, and hides
+    // a category once none of its reports match.
+    view.querySelector("#report-search").addEventListener("input", (event) => {
+      const term = event.target.value.trim();
+      view.querySelectorAll("[data-report]").forEach((node) => {
+        node.hidden = term && !node.dataset.label.includes(term);
+      });
+      view.querySelectorAll("[data-category]").forEach((node) => {
+        node.hidden = !node.querySelector("[data-report]:not([hidden])");
+      });
+    });
+
+    setScreen(view, { appbar: appbar({ title: "التقارير" }), tabbar: tabbar() });
   } catch (error) {
-    setScreen(emptyState("⚠️", "تعذّر تحميل التقرير", error.message), { tabbar: tabbar() });
+    setScreen(emptyState("⚠️", "تعذّر تحميل التقارير", error.message), { tabbar: tabbar() });
+  }
+}
+
+async function renderReport(key, params = {}) {
+  const catalog = await loadReportCatalog().catch(() => null);
+  const spec =
+    catalog?.categories.flatMap((c) => c.reports).find((r) => r.key === key) ||
+    { key, label: "تقرير", params: [], icon: "📄" };
+  setScreen(spinner(), { appbar: appbar({ title: spec.label, back: "#/reports" }) });
+
+  const draw = async () => {
+    const query = new URLSearchParams(params).toString();
+    const data = await api(`/reports/${key}${query ? `?${query}` : ""}`);
+    const isPivot = spec.key === "custom";
+    const view = el(`<div>
+      ${isPivot ? pivotPanel(params) : reportFilterBar(spec)}
+      <div class="action-bar">
+        <button class="btn btn--ghost" type="button" data-export>⬇️ تصدير Excel</button>
+      </div>
+      ${renderReportBody(data)}
+    </div>`);
+
+    // Chips toggle in place; a pivot needs no re-render just to change a choice.
+    view.querySelectorAll(".chip").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        chip.classList.toggle("chip--on");
+        chip.setAttribute("aria-pressed", chip.classList.contains("chip--on"));
+      });
+    });
+
+    // Keep the entered filters so the export uses the same range on screen.
+    for (const [name, value] of Object.entries(params)) {
+      const input = view.querySelector(`[data-param="${name}"]`);
+      if (input) input.value = value;
+    }
+    view.querySelector("[data-run]")?.addEventListener("click", () =>
+      renderReport(key, isPivot ? pivotParams(view) : reportParams(view, spec))
+    );
+    view.querySelector("[data-export]").addEventListener("click", async (event) => {
+      event.target.disabled = true;
+      try {
+        await downloadReport(key, isPivot ? pivotParams(view) : reportParams(view, spec), spec.label);
+      } catch (error) {
+        toast(error.message, "error");
+      } finally {
+        event.target.disabled = false;
+      }
+    });
+
+    setScreen(view, { appbar: appbar({ title: spec.label, back: "#/reports" }) });
+  };
+
+  try {
+    await draw();
+  } catch (error) {
+    setScreen(emptyState("⚠️", "تعذّر تحميل التقرير", error.message), { appbar: appbar({ title: spec.label, back: "#/reports" }) });
   }
 }
 
@@ -1293,11 +1882,18 @@ function openMenu() {
           .join("")}</ul>
       </div>
       <div class="card card--flush">
-        <ul class="list"><li><a class="list__item" href="#/settings" data-settings-link>
+        <ul class="list">
+          <li><a class="list__item" href="#/settings" data-settings-link>
           <span style="font-size:1.4rem">⚙️</span>
           <div class="list__main"><div class="list__title">الإعدادات والضرائب</div>
             <div class="list__meta">بيانات الشركة وأكواد الضريبة</div></div>
-          <span style="color:var(--ink-400)">‹</span></a></li></ul>
+          <span style="color:var(--ink-400)">‹</span></a></li>
+          <li><a class="list__item" href="#/team" data-team-link>
+          <span style="font-size:1.4rem">👥</span>
+          <div class="list__main"><div class="list__title">الفريق والصلاحيات</div>
+            <div class="list__meta">إضافة مستخدمين وتحديد الأدوار</div></div>
+          <span style="color:var(--ink-400)">‹</span></a></li>
+        </ul>
       </div>
       <div class="card">
         <div class="list__meta">النسخة</div><div class="list__title">MS-Factory 1.0</div>
@@ -1326,6 +1922,129 @@ function openMenu() {
     close();
     renderAuth("login");
   };
+}
+
+// ---------------------------------------------------------------- team
+
+const ROLE_LABELS = {
+  owner: "مالك",
+  admin: "مدير",
+  accountant: "محاسب",
+  sales: "مبيعات",
+  storekeeper: "أمين مخزن",
+  viewer: "مشاهدة فقط",
+  customer: "عميل (بوابة)",
+};
+
+async function renderTeam() {
+  setScreen(spinner(), { appbar: appbar({ title: "الفريق", back: "#/dashboard" }) });
+  try {
+    const members = await api("/team");
+    const rows = members
+      .map(
+        (m) => `<li class="list__item">
+        <div class="list__main">
+          <div class="list__title">${escapeHtml(m.full_name || m.email)}</div>
+          <div class="list__meta">${escapeHtml(m.email)} · ${escapeHtml(ROLE_LABELS[m.role] || m.role)}</div>
+        </div>
+        <button class="btn btn--ghost btn--sm" data-edit="${m.id}" data-role="${escapeHtml(m.role)}"
+          data-active="${m.is_active}">تعديل</button></li>`
+      )
+      .join("");
+
+    const view = el(`<div>
+      <div class="card card--flush">
+        <ul class="list">${rows}</ul>
+      </div>
+      <button class="btn btn--block" data-add>＋ إضافة عضو</button>
+    </div>`);
+
+    view.querySelector("[data-add]").onclick = () => {
+      let close = () => {};
+      close = openSheet("إضافة عضو", buildMemberForm({ onDone: () => { close(); renderTeam(); } }));
+    };
+    view.querySelectorAll("[data-edit]").forEach((button) => {
+      button.onclick = () => {
+        let close = () => {};
+        close = openSheet(
+          "تعديل العضو",
+          buildMemberForm({
+            memberId: Number(button.dataset.edit),
+            role: button.dataset.role,
+            isActive: button.dataset.active === "true",
+            onDone: () => {
+              close();
+              renderTeam();
+            },
+          })
+        );
+      };
+    });
+
+    setScreen(view, { appbar: appbar({ title: "الفريق", back: "#/dashboard" }) });
+  } catch (error) {
+    setScreen(emptyState("⚠️", "تعذّر تحميل الفريق", error.message), { tabbar: tabbar() });
+  }
+}
+
+function buildMemberForm({ memberId, role, isActive = true, onDone }) {
+  const editing = Boolean(memberId);
+  const options = Object.entries(ROLE_LABELS)
+    .map(
+      ([value, label]) =>
+        `<option value="${value}" ${value === role ? "selected" : ""}>${escapeHtml(label)}</option>`
+    )
+    .join("");
+
+  const form = el(`<form novalidate>
+    ${editing
+      ? ""
+      : `<div class="field"><label class="field__label" for="m_email">البريد الإلكتروني</label>
+          <input class="input" id="m_email" type="email" required /></div>
+        <div class="field"><label class="field__label" for="m_name">الاسم</label>
+          <input class="input" id="m_name" /></div>
+        <div class="field"><label class="field__label" for="m_password">كلمة مرور مبدئية</label>
+          <input class="input" id="m_password" type="password" required />
+          <div class="field__hint">يستخدمها العضو لأول تسجيل دخول ثم يغيّرها</div></div>`}
+    <div class="field"><label class="field__label" for="m_role">الدور</label>
+      <select class="select" id="m_role" required>${options}</select></div>
+    ${editing
+      ? `<label class="field__label" style="display:flex;gap:8px;align-items:center">
+          <input type="checkbox" id="m_active" ${isActive ? "checked" : ""} /> العضوية نشطة</label>`
+      : ""}
+    <button class="btn btn--block" type="submit">${editing ? "حفظ التعديلات" : "إضافة العضو"}</button>
+  </form>`);
+
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    const button = form.querySelector("button[type=submit]");
+    button.disabled = true;
+    try {
+      if (editing) {
+        await api(`/team/${memberId}`, { method: "PATCH", body: { role: form.querySelector("#m_role").value } });
+        if (!form.querySelector("#m_active").checked) {
+          await api(`/team/${memberId}`, { method: "DELETE" });
+        }
+        toast("تم تحديث العضو", "success");
+      } else {
+        await api("/team", {
+          method: "POST",
+          body: {
+            email: form.querySelector("#m_email").value.trim(),
+            full_name: form.querySelector("#m_name").value.trim(),
+            role: form.querySelector("#m_role").value,
+            password: form.querySelector("#m_password").value,
+          },
+        });
+        toast("تمت إضافة العضو", "success");
+      }
+      await onDone();
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+    }
+  };
+  return form;
 }
 
 // ---------------------------------------------------------------- settings
@@ -1514,7 +2233,8 @@ function openTaxCodeSheet(code, taxAccounts) {
 function route() {
   const hash = location.hash || "#/dashboard";
   const [path, query] = hash.split("?");
-  const [, segment, param] = path.split("/");
+  const parts = path.split("/");
+  const [, segment, param, sub] = parts;
   const params = new URLSearchParams(query || "");
   app.dataset.route = hash;
 
@@ -1532,9 +2252,13 @@ function route() {
     case "dashboard":
       return renderDashboard();
     case "invoices":
-      return param === "new" ? renderInvoiceForm() : param ? renderInvoiceDetail(param) : renderInvoices();
+      if (param === "new") return renderInvoiceForm();
+      if (param && sub === "edit") return renderInvoiceForm({ invoiceId: Number(param) });
+      return param ? renderInvoiceDetail(param) : renderInvoices();
     case "payments":
       return renderPayments({ autoNew: params.get("new") });
+    case "production":
+      return param === "new" ? renderWorkOrderForm() : param ? renderWorkOrderDetail(param) : renderProduction();
     case "contacts":
       return param ? renderContactDetail(param) : renderContacts();
     case "reports":
@@ -1543,6 +2267,8 @@ function route() {
       return param === "new" ? renderJournalForm() : renderJournal();
     case "settings":
       return renderSettings();
+    case "team":
+      return renderTeam();
     default:
       location.hash = "#/dashboard";
   }

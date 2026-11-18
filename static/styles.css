@@ -225,6 +225,9 @@ button { cursor: pointer; }
 .badge--draft { background: var(--ink-100); color: var(--ink-700); }
 .badge--void { background: var(--danger-bg); color: var(--danger-fg); }
 .badge--overdue { background: var(--danger-bg); color: var(--danger-fg); }
+.badge--in_progress { background: var(--info-bg); color: var(--info-fg); }
+.badge--completed { background: var(--ok-bg); color: var(--ok-fg); }
+.badge--cancelled { background: var(--ink-100); color: var(--ink-700); }
 
 /* ---------- Forms ---------- */
 .field { margin-bottom: 14px; }
@@ -272,6 +275,22 @@ button { cursor: pointer; }
 .btn--ghost { background: var(--ink-100); color: var(--ink-900); }
 .btn--danger { background: var(--danger-fg); }
 .btn--sm { min-height: 40px; padding: 8px 14px; font-size: 0.85rem; }
+
+/* Chip pickers for the custom (pivot) report. Big touch targets, because the
+ * whole app is used one-thumbed on a phone. */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  min-height: 40px;
+  padding: 8px 14px;
+  border: 1px solid var(--ink-200);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-700);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.chip--on { background: var(--brand-600); border-color: var(--brand-600); color: #fff; }
 
 /* Sticky action bar so the primary action is always reachable by thumb. */
 .action-bar {
