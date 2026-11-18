@@ -119,7 +119,7 @@ class InventoryService:
             entity_type="item",
             entity_id=item.id,
             user_id=self.user_id,
-            summary=f"Item {item.code} — {item.name}",
+            summary=f"صنف {item.code} — {item.name}",
         )
         self.db.flush()
         return item
@@ -154,7 +154,7 @@ class InventoryService:
             entity_type="item",
             entity_id=item.id,
             user_id=self.user_id,
-            summary=f"Added variant {variant.label or variant.code} to {item.code}",
+            summary=f"إضافة مقاس {variant.label or variant.code} للصنف {item.code}",
         )
         return variant
 
@@ -205,7 +205,7 @@ class InventoryService:
             entity_type="warehouse",
             entity_id=warehouse.id,
             user_id=self.user_id,
-            summary=f"Warehouse {warehouse.code} — {warehouse.name}",
+            summary=f"مخزن {warehouse.code} — {warehouse.name}",
         )
         return warehouse
 

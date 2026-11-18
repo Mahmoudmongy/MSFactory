@@ -5,6 +5,7 @@ from fastapi import APIRouter
 
 from . import (
     accounts,
+    audit,
     auth,
     contacts,
     inventory,
@@ -20,6 +21,7 @@ from . import (
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(auth.router)
 api_router.include_router(accounts.router)
+api_router.include_router(audit.router)
 api_router.include_router(contacts.router)
 api_router.include_router(inventory.router)
 api_router.include_router(invoices.router)

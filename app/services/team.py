@@ -69,7 +69,7 @@ class TeamService:
             entity_type="membership",
             entity_id=membership.id,
             user_id=self.user_id,
-            summary=f"Added {email} as {role}",
+            summary=f"إضافة {email} بدور {role}",
         )
         return membership
 
@@ -85,7 +85,7 @@ class TeamService:
             entity_type="membership",
             entity_id=membership.id,
             user_id=self.user_id,
-            summary=f"Changed role to {role}",
+            summary=f"تغيير الدور إلى {role}",
         )
         return membership
 
@@ -99,7 +99,7 @@ class TeamService:
             entity_type="membership",
             entity_id=membership.id,
             user_id=self.user_id,
-            summary="Deactivated member",
+            summary="تعطيل عضو",
         )
         return membership
 

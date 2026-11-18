@@ -71,7 +71,7 @@ class SettingsService:
             entity_type="company",
             entity_id=self.company_id,
             user_id=self.user_id,
-            summary=f"Updated {', '.join(sorted(values))}",
+            summary=f"تعديل الإعدادات: {', '.join(sorted(values))}",
         )
         return self.settings.all()
 
@@ -105,7 +105,7 @@ class SettingsService:
             entity_type="tax_code",
             entity_id=code.id,
             user_id=self.user_id,
-            summary=f"Created tax code {name} @ {rate}%",
+            summary=f"إضافة كود ضريبة {name} بنسبة {rate}%",
         )
         return code
 

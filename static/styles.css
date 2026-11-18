@@ -623,3 +623,38 @@ td.num, th.num { text-align: left; }
   /* No bottom tabbar on desktop, so the action bar can sit lower. */
   .action-bar { bottom: 12px; }
 }
+
+/* ---------- Filter card (search + period, above a list) ---------- */
+.filter-card { display: grid; gap: 12px; margin-bottom: 14px; }
+.filter-card__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+.filter-card__grid .field { margin-bottom: 0; }
+.filter-card__actions { display: flex; gap: 8px; justify-content: flex-end; }
+.filter-card__actions .btn { min-height: 42px; }
+
+/* ---------- Report hub (grouped report cards) ---------- */
+.report-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.report-group { background: var(--surface); border: 1px solid var(--ink-100); border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow); }
+.report-group__head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.report-group__head h3 { margin: 0; font-size: 1rem; font-weight: 800; }
+.report-group__head span { font-size: 0.72rem; color: var(--ink-500); }
+.report-group__list { display: grid; gap: 4px; }
+.report-group__list button {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 40px;
+  padding: 8px 10px; background: transparent; border: 0; border-radius: var(--radius-sm);
+  text-align: start; font-size: 0.88rem; color: var(--ink-700);
+}
+.report-group__list button:hover { background: var(--brand-50); color: var(--brand-700); }
+
+/* ---------- Statement pair (income statement + balance sheet) ---------- */
+.statement-period { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-bottom: 14px; }
+.statement-period .field { margin-bottom: 0; min-width: 160px; }
+.statement-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+.statement-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--ink-100); }
+.statement-heading h3 { margin: 0; font-size: 1rem; font-weight: 800; }
+.statement-section-title { padding: 10px 16px 4px; font-size: 0.78rem; font-weight: 800; color: var(--ink-500); }
+.statement-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.statement-table td { padding: 8px 16px; border-bottom: 1px solid var(--ink-50); }
+.statement-table td:last-child { text-align: left; direction: ltr; font-variant-numeric: tabular-nums; }
+.statement-table tr.statement-subtotal td { font-weight: 700; border-top: 1px solid var(--ink-200); }
+.statement-table tr.statement-final td { font-weight: 800; background: var(--brand-50); }
+.nowrap { white-space: nowrap; }

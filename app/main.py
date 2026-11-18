@@ -64,7 +64,7 @@ app.include_router(api_router)
 # One place to bump when the frontend changes: index.html references
 # /static/app.js?v=<ASSET_VERSION>, so browsers and the service worker always
 # pick up the new files while still caching aggressively in between releases.
-ASSET_VERSION = "15"
+ASSET_VERSION = "16"
 
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

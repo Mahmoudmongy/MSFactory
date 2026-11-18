@@ -110,7 +110,7 @@ class ProductionService:
             entity_type="work_order",
             entity_id=order.id,
             user_id=self.user_id,
-            summary=f"Work order {number} for {item.name}",
+            summary=f"أمر إنتاج {number} للصنف {item.name}",
         )
         self.db.flush()
         return order
@@ -154,7 +154,7 @@ class ProductionService:
             entity_type="work_order",
             entity_id=order.id,
             user_id=self.user_id,
-            summary=f"Started work order {order.number}",
+            summary=f"بدء أمر إنتاج {order.number}",
         )
         self.db.flush()
         return order
@@ -201,7 +201,7 @@ class ProductionService:
             entity_type="work_order",
             entity_id=order.id,
             user_id=self.user_id,
-            summary=f"Completed work order {order.number}",
+            summary=f"إتمام أمر إنتاج {order.number}",
         )
         self.db.flush()
         return order
@@ -246,7 +246,7 @@ class ProductionService:
             entity_type="work_order",
             entity_id=order.id,
             user_id=self.user_id,
-            summary=f"Cancelled work order {order.number}: {reason}",
+            summary=f"إلغاء أمر إنتاج {order.number}: {reason}",
         )
         self.db.flush()
         return order

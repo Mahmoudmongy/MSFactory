@@ -1,7 +1,7 @@
 """Pydantic request/response models for the v1 API."""
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
@@ -600,3 +600,20 @@ class TeamMemberOut(BaseModel):
 class RoleOut(BaseModel):
     value: str
     label: str
+
+
+# --- audit trail ---
+class AuditEntryOut(BaseModel):
+    id: int
+    created_at: datetime
+    user_id: int | None = None
+    user_name: str
+    action: str
+    entity_type: str
+    entity_id: int | None = None
+    summary: str
+
+
+class AuditPage(BaseModel):
+    total: int
+    items: list[AuditEntryOut]

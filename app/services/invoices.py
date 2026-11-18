@@ -41,6 +41,10 @@ from .inventory import InventoryService
 
 ZERO = Decimal("0.00")
 
+# Invoice kinds and payment directions are stored in English; the audit trail
+# is read by Arabic speakers, so it shows the Arabic word.
+KIND_AR = {"sales": "فاتورة بيع", "purchase": "فاتورة شراء", "sales_return": "مرتجع بيع", "purchase_return": "مرتجع شراء"}
+
 
 class InvoiceService:
     def __init__(self, db: Session, company_id: int, user_id: int | None = None):
@@ -194,7 +198,7 @@ class InvoiceService:
             entity_type="invoice",
             entity_id=ret.id,
             user_id=self.user_id,
-            summary=f"Return {ret.number} against {original.number}",
+            summary=f"مرتجع {ret.number} مقابل الفاتورة {original.number}",
         )
         self.db.flush()
         return ret
@@ -344,7 +348,7 @@ class InvoiceService:
             entity_type="invoice",
             entity_id=invoice.id,
             user_id=self.user_id,
-            summary=f"{kind} invoice {number} for {contact.name}",
+            summary=f"{KIND_AR.get(kind, kind)} رقم {number} للجهة {contact.name}",
         )
         return invoice
 
@@ -447,7 +451,7 @@ class InvoiceService:
             entity_type="invoice",
             entity_id=invoice.id,
             user_id=self.user_id,
-            summary=f"Updated {invoice.kind} invoice {invoice.number}",
+            summary=f"تعديل {KIND_AR.get(invoice.kind, invoice.kind)} رقم {invoice.number}",
         )
         self.db.flush()
         return invoice
@@ -463,7 +467,7 @@ class InvoiceService:
             entity_type="invoice",
             entity_id=invoice.id,
             user_id=self.user_id,
-            summary=f"Issued invoice {invoice.number}",
+            summary=f"إصدار الفاتورة {invoice.number}",
         )
         self.db.flush()
         return invoice
@@ -494,7 +498,7 @@ class InvoiceService:
             entity_type="invoice",
             entity_id=invoice.id,
             user_id=self.user_id,
-            summary=f"Voided {invoice.number}: {reason}",
+            summary=f"إلغاء الفاتورة {invoice.number}: {reason}",
         )
         self.db.flush()
         return invoice

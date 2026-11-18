@@ -12,6 +12,32 @@
 
 const STORAGE_KEY = "msfactory.session";
 
+/* Client mirror of the server's ROLE_PERMISSIONS (app/core/permissions.py), in
+   the dot form the client uses. "*" means every permission. */
+const CLIENT_PERMISSIONS = {
+  owner: "*",
+  admin: "*",
+  accountant: new Set([
+    "account.manage", "contact.view", "contact.manage", "item.view", "item.manage",
+    "warehouse.manage", "stock.view", "stock.manage", "production.view", "production.manage",
+    "invoice.view", "invoice.manage", "payment.view", "payment.manage", "journal.manage",
+    "report.view", "period.manage", "audit.view",
+  ]),
+  sales: new Set([
+    "contact.view", "contact.manage", "item.view", "stock.view", "invoice.view",
+    "invoice.manage", "payment.view", "report.view",
+  ]),
+  storekeeper: new Set([
+    "item.view", "item.manage", "warehouse.manage", "stock.view", "stock.manage",
+    "production.view", "production.manage", "contact.view", "report.view",
+  ]),
+  viewer: new Set([
+    "contact.view", "item.view", "stock.view", "production.view", "invoice.view",
+    "payment.view", "report.view",
+  ]),
+  customer: new Set(),
+};
+
 const store = {
   session: null,
   user: null,
@@ -48,10 +74,13 @@ const store = {
 
   can(action) {
     const role = this.role;
-    if (role === "owner" || role === "admin") return true;
-    if (role === "accountant") return !["company.manage", "member.manage"].includes(action);
-    if (role === "viewer") return action.endsWith(".view") || action === "report.view";
-    return false;
+    // Mirrors ROLE_PERMISSIONS on the server, in the dot form the client uses
+    // ("invoice.manage", not "invoice:manage"). The server is still the
+    // authority; this only hides controls a role can never use, so a rejected
+    // click is not the first sign of a missing permission.
+    const perms = CLIENT_PERMISSIONS[role];
+    if (!perms) return false;
+    return perms === "*" || perms.has(action);
   },
 
   reset() {
@@ -174,6 +203,20 @@ export function today() {
   return new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 }
 
+/** Date and clock time, e.g. "18 نوفمبر 2026، 10:42 ص". */
+export function dateTime(value) {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return new Intl.DateTimeFormat("ar-EG-u-nu-latn", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(parsed);
+}
+
 export function toast(message, kind = "") {
   const node = document.getElementById("toast");
   node.textContent = message;
@@ -256,7 +299,10 @@ export function confirmDialog(message) {
 
 const app = document.getElementById("app");
 
-/* Sections shown in the sidebar, in the order the old app lists them. */
+/* Sections shown in the sidebar, in the order the old app lists them.
+   ``perm`` is the permission a role must hold for the link to appear; links
+   without one are visible to everyone. The server enforces the same rules, so
+   this only keeps the menu honest for the role in use. */
 const NAV_SECTIONS = [
   { href: "#/dashboard", icon: "⌂", label: "الملخص" },
   { href: "#/accounts", icon: "▤", label: "الحسابات النقدية والبنوك" },
@@ -269,8 +315,9 @@ const NAV_SECTIONS = [
   { href: "#/reports", icon: "▥", label: "التقارير" },
   { href: "#/statements", icon: "▦", label: "القوائم المالية" },
   { href: "#/journal", icon: "≡", label: "قيود اليومية" },
-  { href: "#/team", icon: "♙", label: "الموظفون والصلاحيات" },
-  { href: "#/settings", icon: "⚙", label: "الإعدادات" },
+  { href: "#/timeline", icon: "◷", label: "السجل الزمني", perm: "audit.view" },
+  { href: "#/team", icon: "♙", label: "الموظفون والصلاحيات", perm: "user.manage" },
+  { href: "#/settings", icon: "⚙", label: "الإعدادات", perm: "settings.manage" },
 ];
 
 function currentSegment() {
@@ -279,7 +326,7 @@ function currentSegment() {
 
 function sidebar() {
   const segment = currentSegment();
-  const links = NAV_SECTIONS.map((item) => {
+  const links = NAV_SECTIONS.filter((item) => !item.perm || store.can(item.perm)).map((item) => {
     const target = item.href.replace(/^#\//, "");
     const active = segment === target || (segment === "" && target === "dashboard");
     return `<a class="sidebar__link" href="${item.href}" ${active ? 'aria-current="page"' : ""}>
@@ -434,11 +481,11 @@ function loadTheme() {
 }
 
 const TABS = [
-  { href: "#/dashboard", icon: "🏠", label: "الرئيسية" },
-  { href: "#/invoices", icon: "🧾", label: "الفواتير" },
-  { href: "#/payments", icon: "💵", label: "المدفوعات" },
-  { href: "#/production", icon: "🏭", label: "الإنتاج" },
-  { href: "#/contacts", icon: "👥", label: "العملاء" },
+  { href: "#/dashboard", icon: "🏠", label: "الملخص" },
+  { href: "#/invoices", icon: "🧾", label: "الفواتير والمرتجعات" },
+  { href: "#/payments", icon: "💵", label: "المقبوضات والمدفوعات" },
+  { href: "#/production", icon: "🏭", label: "أوامر الإنتاج" },
+  { href: "#/contacts", icon: "👥", label: "العملاء والموردون" },
   { href: "#/reports", icon: "📊", label: "التقارير" },
 ];
 
@@ -636,7 +683,7 @@ async function renderDashboard() {
 // ---------------------------------------------------------------- invoices
 
 async function renderInvoices() {
-  setScreen(spinner(), { appbar: appbar({ title: "الفواتير" }), tabbar: tabbar() });
+  setScreen(spinner(), { appbar: appbar({ title: "الفواتير والمرتجعات" }), tabbar: tabbar() });
   try {
     const invoices = await api("/invoices");
     await loadContacts();
@@ -668,10 +715,10 @@ async function renderInvoices() {
         ${subTabs(
           "invoices",
           [
-            { key: "sales", label: "بيع" },
-            { key: "purchase", label: "شراء" },
-            { key: "sales_return", label: "مرتجع بيع" },
-            { key: "purchase_return", label: "مرتجع شراء" },
+            { key: "sales", label: "فواتير البيع" },
+            { key: "sales_return", label: "مرتجعات البيع" },
+            { key: "purchase", label: "فواتير الشراء" },
+            { key: "purchase_return", label: "مرتجعات الشراء" },
           ],
           view
         )}
@@ -680,7 +727,7 @@ async function renderInvoices() {
         </div>
         <div class="action-bar"><a class="btn" href="#/invoices/new">＋ فاتورة جديدة</a></div>
       </div>`),
-      { appbar: appbar({ title: "الفواتير" }), tabbar: tabbar() }
+      { appbar: appbar({ title: "الفواتير والمرتجعات" }), tabbar: tabbar() }
     );
   } catch (error) {
     setScreen(emptyState("⚠️", "خطأ", error.message), { tabbar: tabbar() });
@@ -1167,7 +1214,7 @@ async function loadInventoryOptions() {
 }
 
 async function renderProduction() {
-  setScreen(spinner(), { appbar: appbar({ title: "الإنتاج" }), tabbar: tabbar() });
+  setScreen(spinner(), { appbar: appbar({ title: "أوامر الإنتاج" }), tabbar: tabbar() });
   try {
     const orders = await api("/production/work-orders");
     const rows = orders
@@ -1191,7 +1238,7 @@ async function renderProduction() {
         </div>
         <div class="action-bar"><a class="btn" href="#/production/new">＋ أمر إنتاج</a></div>
       </div>`),
-      { appbar: appbar({ title: "الإنتاج" }), tabbar: tabbar() }
+      { appbar: appbar({ title: "أوامر الإنتاج" }), tabbar: tabbar() }
     );
   } catch (error) {
     setScreen(emptyState("⚠️", "خطأ", error.message), { tabbar: tabbar() });
@@ -1434,13 +1481,17 @@ function buildPaymentForm({ kind, contactId, amount, cashAccounts, invoiceId, on
 }
 
 async function renderPayments({ autoNew } = {}) {
-  setScreen(spinner(), { appbar: appbar({ title: "المدفوعات" }), tabbar: tabbar() });
+  setScreen(spinner(), { appbar: appbar({ title: "المقبوضات والمدفوعات" }), tabbar: tabbar() });
   try {
     const [payments, accounts] = await Promise.all([api("/payments"), loadAccounts()]);
     await loadContacts();
     const cashAccounts = accounts.filter((a) => ["1010", "1020"].includes(a.code));
 
-    const rows = payments
+    const kind = hashParam("payments", "receipts");
+    const isPaymentsTab = kind === "payments";
+    const shown = payments.filter((p) => (isPaymentsTab ? p.kind === "spend" : p.kind === "receive"));
+
+    const rows = shown
       .map(
         (payment) => `<li><div class="list__item">
         <div class="list__main">
@@ -1455,15 +1506,25 @@ async function renderPayments({ autoNew } = {}) {
 
     setScreen(
       el(`<div>
+        ${subTabs(
+          "payments",
+          [
+            { key: "receipts", label: "سندات القبض" },
+            { key: "payments", label: "سندات الدفع" },
+          ],
+          kind
+        )}
         <div class="card card--flush">
-          ${payments.length ? `<ul class="list">${rows}</ul>` : emptyState("💵", "لا توجد مدفوعات", "سجّل تحصيلاً من عميل أو دفعة لمورد")}
+          ${shown.length
+            ? `<ul class="list">${rows}</ul>`
+            : emptyState("💵", isPaymentsTab ? "لا توجد سندات دفع" : "لا توجد سندات قبض", "سجّل تحصيلاً من عميل أو دفعة لمورد")}
         </div>
         <div class="action-bar">
-          <button class="btn" data-new="receive">＋ تحصيل من عميل</button>
-          <button class="btn btn--ghost" data-new="spend">＋ صرف لمورد</button>
+          <button class="btn" data-new="receive">＋ سند قبض</button>
+          <button class="btn btn--ghost" data-new="spend">＋ سند دفع</button>
         </div>
       </div>`),
-      { appbar: appbar({ title: "المدفوعات" }), tabbar: tabbar() }
+      { appbar: appbar({ title: "المقبوضات والمدفوعات" }), tabbar: tabbar() }
     );
 
     document.querySelectorAll("[data-new]").forEach((button) => {
@@ -1523,12 +1584,20 @@ async function renderContacts() {
   setScreen(spinner(), { appbar: appbar({ title: "العملاء والموردون" }), tabbar: tabbar() });
   try {
     const contacts = await loadContacts(true);
-    const rows = contacts
+    // One record can be both a customer and a supplier; the old app shows it in
+    // both tabs, so filter by "is a customer" / "is a supplier" rather than by a
+    // single exclusive kind.
+    const kind = hashParam("contacts", "customers");
+    const isSupplierTab = kind === "suppliers";
+    const shown = contacts.filter((c) =>
+      isSupplierTab ? c.kind === "supplier" || c.kind === "both" : c.kind === "customer" || c.kind === "both"
+    );
+    const rows = shown
       .map(
         (contact) => `<li><a class="list__item" href="#/contacts/${contact.id}">
         <div class="list__main">
           <div class="list__title">${escapeHtml(contact.name)}</div>
-          <div class="list__meta">${contact.kind === "customer" ? "عميل" : "مورد"}
+          <div class="list__meta">${contact.kind === "supplier" ? "مورد" : contact.kind === "both" ? "عميل ومورد" : "عميل"}
             ${contact.phone ? `· <span class="num">${escapeHtml(contact.phone)}</span>` : ""}</div>
         </div><span style="color:var(--ink-400)">‹</span></a></li>`
       )
@@ -1536,8 +1605,18 @@ async function renderContacts() {
 
     setScreen(
       el(`<div>
+        ${subTabs(
+          "contacts",
+          [
+            { key: "customers", label: "العملاء" },
+            { key: "suppliers", label: "الموردون" },
+          ],
+          kind
+        )}
         <div class="card card--flush">
-          ${contacts.length ? `<ul class="list">${rows}</ul>` : emptyState("👥", "لا يوجد عملاء", "أضف عميلاً أو مورداً للبدء")}
+          ${shown.length
+            ? `<ul class="list">${rows}</ul>`
+            : emptyState("👥", isSupplierTab ? "لا يوجد موردون" : "لا يوجد عملاء", "أضف عميلاً أو مورداً للبدء")}
         </div>
         <div class="action-bar"><button class="btn" data-add>＋ جهة جديدة</button></div>
       </div>`),
@@ -2030,7 +2109,7 @@ async function renderReport(key, params = {}, back = "#/reports") {
 // ---------------------------------------------------------------- journal
 
 async function renderJournal() {
-  setScreen(spinner(), { appbar: appbar({ title: "القيود المحاسبية", back: "#/reports" }) });
+  setScreen(spinner(), { appbar: appbar({ title: "قيود اليومية", back: "#/reports" }) });
   try {
     const entries = await api("/journal");
     const view = el(`<div>
@@ -2054,7 +2133,7 @@ async function renderJournal() {
       </div>
       <div class="action-bar"><a class="btn" href="#/journal/new">＋ قيد يدوي</a></div>
     </div>`);
-    setScreen(view, { appbar: appbar({ title: "القيود المحاسبية", back: "#/reports" }) });
+    setScreen(view, { appbar: appbar({ title: "قيود اليومية", back: "#/reports" }) });
   } catch (error) {
     setScreen(emptyState("⚠️", "خطأ", error.message), { tabbar: tabbar() });
   }
@@ -2418,7 +2497,7 @@ const ROLE_LABELS = {
 };
 
 async function renderTeam() {
-  setScreen(spinner(), { appbar: appbar({ title: "الفريق", back: "#/dashboard" }) });
+  setScreen(spinner(), { appbar: appbar({ title: "الموظفون والصلاحيات", back: "#/dashboard" }) });
   try {
     const members = await api("/team");
     const rows = members
@@ -2462,7 +2541,7 @@ async function renderTeam() {
       };
     });
 
-    setScreen(view, { appbar: appbar({ title: "الفريق", back: "#/dashboard" }) });
+    setScreen(view, { appbar: appbar({ title: "الموظفون والصلاحيات", back: "#/dashboard" }) });
   } catch (error) {
     setScreen(emptyState("⚠️", "تعذّر تحميل الفريق", error.message), { tabbar: tabbar() });
   }
@@ -2526,6 +2605,123 @@ function buildMemberForm({ memberId, role, isActive = true, onDone }) {
     }
   };
   return form;
+}
+
+// ---------------------------------------------------------------- timeline (audit trail)
+
+/* Human labels for the action codes the services write. Unknown codes fall
+   back to the raw code, so a new action never renders as blank. */
+const ACTION_LABELS = {
+  "invoice.create": "إنشاء فاتورة",
+  "invoice.issue": "إصدار فاتورة",
+  "invoice.update": "تعديل فاتورة",
+  "invoice.void": "إلغاء فاتورة",
+  "invoice.return": "إنشاء مرتجع",
+  "payment.create": "تسجيل دفعة",
+  "payment.reverse": "عكس دفعة",
+  "journal.post": "ترحيل قيد",
+  "journal.reverse": "عكس قيد",
+  "item.create": "إضافة صنف",
+  "item.variant.add": "إضافة مقاس/لون",
+  "warehouse.create": "إضافة مخزن",
+  "work_order.create": "إنشاء أمر إنتاج",
+  "work_order.start": "بدء أمر إنتاج",
+  "work_order.complete": "إتمام أمر إنتاج",
+  "work_order.cancel": "إلغاء أمر إنتاج",
+  "settings.update": "تعديل الإعدادات",
+  "tax_code.create": "إضافة كود ضريبة",
+  "member.add": "إضافة عضو",
+  "member.role": "تغيير دور عضو",
+  "member.deactivate": "تعطيل عضو",
+};
+
+/* Actions that create money/documents are "positive"; corrections are shown in
+   a muted tone so a reversal reads differently from the entry it fixes. */
+const NEGATIVE_ACTIONS = new Set([
+  "invoice.void", "payment.reverse", "journal.reverse", "work_order.cancel", "member.deactivate",
+]);
+
+const actionLabel = (action) => ACTION_LABELS[action] || action;
+
+async function renderTimeline() {
+  const search = hashParam("timeline_search");
+  const action = hashParam("timeline_action");
+  const from = hashParam("timeline_from");
+  const to = hashParam("timeline_to");
+  setScreen(spinner(), { appbar: appbar({ title: "السجل الزمني" }), tabbar: tabbar() });
+  try {
+    const query = new URLSearchParams({ limit: "200" });
+    if (search) query.set("search", search);
+    if (action) query.set("action", action);
+    if (from) query.set("date_from", from);
+    if (to) query.set("date_to", to);
+    const [page, actions] = await Promise.all([api(`/audit-logs?${query}`), api("/audit-logs/actions")]);
+
+    const actionOptions = actions
+      .map((code) => `<option value="${escapeHtml(code)}" ${code === action ? "selected" : ""}>${escapeHtml(actionLabel(code))}</option>`)
+      .join("");
+
+    const rows = page.items
+      .map((entry) => {
+        const negative = NEGATIVE_ACTIONS.has(entry.action);
+        return `<tr>
+          <td class="nowrap num">${escapeHtml(dateTime(entry.created_at))}</td>
+          <td>${escapeHtml(entry.user_name)}</td>
+          <td><span class="badge badge--${negative ? "void" : "issued"}">${escapeHtml(actionLabel(entry.action))}</span></td>
+          <td>${escapeHtml(entry.summary || entry.entity_type)}</td></tr>`;
+      })
+      .join("");
+
+    const view = el(`<div>
+      <div class="card filter-card">
+        <div class="filter-card__grid">
+          <label class="field"><span class="field__label">بحث (يحتوي على)</span>
+            <input class="input" id="tl_search" value="${escapeHtml(search)}" placeholder="المستخدم أو البيان أو المرجع" /></label>
+          <label class="field"><span class="field__label">الإجراء</span>
+            <select class="input" id="tl_action"><option value="">كل الإجراءات</option>${actionOptions}</select></label>
+          <label class="field"><span class="field__label">من تاريخ</span>
+            <input class="input" type="date" id="tl_from" value="${escapeHtml(from)}" /></label>
+          <label class="field"><span class="field__label">إلى تاريخ</span>
+            <input class="input" type="date" id="tl_to" value="${escapeHtml(to)}" /></label>
+        </div>
+        <div class="filter-card__actions">
+          <button class="btn btn--ghost" type="button" id="tl_clear">× مسح</button>
+          <button class="btn" type="button" id="tl_apply">تصفية</button>
+        </div>
+      </div>
+      <div class="card card--flush">
+        <div class="card__head"><h2 class="card__title">آخر العمليات</h2>
+          <span class="list__meta num">${Number(page.total).toLocaleString("en-US")} سجل</span></div>
+        ${page.items.length
+          ? `<div class="table-wrap"><table>
+              <thead><tr><th>التاريخ والوقت</th><th>المستخدم</th><th>الإجراء</th><th>البيان</th></tr></thead>
+              <tbody>${rows}</tbody></table></div>`
+          : emptyState("◷", "لا توجد حركات", "لم تُسجّل أي عملية بهذه الفلاتر")}
+      </div>
+    </div>`);
+
+    const go = () => {
+      const params = new URLSearchParams();
+      const s = view.querySelector("#tl_search").value.trim();
+      const a = view.querySelector("#tl_action").value;
+      const f = view.querySelector("#tl_from").value;
+      const t = view.querySelector("#tl_to").value;
+      if (s) params.set("timeline_search", s);
+      if (a) params.set("timeline_action", a);
+      if (f) params.set("timeline_from", f);
+      if (t) params.set("timeline_to", t);
+      location.hash = `#/timeline${params.toString() ? `?${params}` : ""}`;
+    };
+    view.querySelector("#tl_apply").addEventListener("click", go);
+    view.querySelector("#tl_search").addEventListener("keydown", (e) => e.key === "Enter" && go());
+    view.querySelector("#tl_clear").addEventListener("click", () => {
+      location.hash = "#/timeline";
+    });
+
+    setScreen(view, { appbar: appbar({ title: "السجل الزمني" }), tabbar: tabbar() });
+  } catch (error) {
+    setScreen(emptyState("⚠️", "خطأ", error.message), { tabbar: tabbar() });
+  }
 }
 
 // ---------------------------------------------------------------- settings
@@ -2758,6 +2954,8 @@ function route() {
       return renderSettings();
     case "team":
       return renderTeam();
+    case "timeline":
+      return renderTimeline();
     default:
       location.hash = "#/dashboard";
   }
