@@ -20,7 +20,7 @@ from .core.middleware import RateLimitMiddleware
 from .db.session import engine
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-logger = logging.getLogger("openbooks")
+logger = logging.getLogger("msfactory")
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -64,7 +64,7 @@ app.include_router(api_router)
 # One place to bump when the frontend changes: index.html references
 # /static/app.js?v=<ASSET_VERSION>, so browsers and the service worker always
 # pick up the new files while still caching aggressively in between releases.
-ASSET_VERSION = "7"
+ASSET_VERSION = "8"
 
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

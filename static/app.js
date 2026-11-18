@@ -1,4 +1,4 @@
-/* OpenBooks frontend.
+/* MS-Factory frontend.
  *
  * Single-page, hash-routed, no build step: the whole app is one ES module so it
  * can be served straight from /static and installed as a PWA. Structure:
@@ -10,7 +10,7 @@
 
 // ---------------------------------------------------------------- store
 
-const STORAGE_KEY = "openbooks.session";
+const STORAGE_KEY = "msfactory.session";
 
 const store = {
   session: null,
@@ -286,8 +286,8 @@ function renderAuth(mode = "login") {
   const isLogin = mode === "login";
   const view = el(`<div class="auth screen--plain">
     <div class="auth__logo">
-      <div class="auth__mark">OB</div>
-      <h1 class="auth__title">OpenBooks</h1>
+      <div class="auth__mark">MS</div>
+      <h1 class="auth__title">MS-Factory</h1>
       <p class="auth__sub">محاسبة سحابية لشركتك — من أي مكان</p>
     </div>
     <form novalidate>
@@ -1300,7 +1300,7 @@ function openMenu() {
           <span style="color:var(--ink-400)">‹</span></a></li></ul>
       </div>
       <div class="card">
-        <div class="list__meta">النسخة</div><div class="list__title">OpenBooks 1.0</div>
+        <div class="list__meta">النسخة</div><div class="list__title">MS-Factory 1.0</div>
         <div class="list__meta">المنطقة الزمنية: ${Intl.DateTimeFormat().resolvedOptions().timeZone}</div>
       </div>
       <button class="btn btn--danger btn--block" data-logout>تسجيل الخروج</button>

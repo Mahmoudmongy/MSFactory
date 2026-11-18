@@ -13,12 +13,12 @@ jobs:
       postgres:
         image: postgres:17-alpine
         env:
-          POSTGRES_USER: openbooks
-          POSTGRES_PASSWORD: openbooks_test_pw
-          POSTGRES_DB: openbooks_test
+          POSTGRES_USER: msfactory
+          POSTGRES_PASSWORD: msfactory_test_pw
+          POSTGRES_DB: msfactory_test
         ports: ["5432:5432"]
         options: >-
-          --health-cmd "pg_isready -U openbooks"
+          --health-cmd "pg_isready -U msfactory"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -32,11 +32,11 @@ jobs:
           --health-retries 5
 
     env:
-      OPENBOOKS_DATABASE_URL: postgresql+psycopg://openbooks:openbooks_test_pw@localhost:5432/openbooks_test
-      OPENBOOKS_REDIS_URL: redis://localhost:6379/0
-      OPENBOOKS_SECRET_KEY: ci-only-secret
-      OPENBOOKS_LOGIN_RATE_LIMIT_PER_MINUTE: "1000"
-      OPENBOOKS_RATE_LIMIT_PER_MINUTE: "5000"
+      MSFACTORY_DATABASE_URL: postgresql+psycopg://msfactory:msfactory_test_pw@localhost:5432/msfactory_test
+      MSFACTORY_REDIS_URL: redis://localhost:6379/0
+      MSFACTORY_SECRET_KEY: ci-only-secret
+      MSFACTORY_LOGIN_RATE_LIMIT_PER_MINUTE: "1000"
+      MSFACTORY_RATE_LIMIT_PER_MINUTE: "5000"
 
     steps:
       - uses: actions/checkout@v4

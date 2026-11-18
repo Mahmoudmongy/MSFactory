@@ -18,7 +18,7 @@ from .services.invoices import InvoiceService
 from .services.onboarding import provision_company
 from .services.payments import PaymentService
 
-DEMO_EMAIL = "admin@openbooks.eg"
+DEMO_EMAIL = "admin@msfactory.eg"
 DEMO_PASSWORD = "Admin123!@#"
 
 

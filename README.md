@@ -1,4 +1,4 @@
-# OpenBooks — نظام محاسبة أونلاين للموبايل
+# MS-Factory — نظام محاسبة أونلاين للموبايل
 
 نظام محاسبي مستقل مبني من الصفر بوظائف شبيهة بـ Manager.io — **مش** تفكيك
 للكود الأصلي ولا نسخ لتصميمه. يعمل كتطبيق ويب تقدّمي (PWA) على الموبايل،
@@ -40,27 +40,27 @@ python -m alembic upgrade head
 python -m app.seed
 ```
 
-الدخول التجريبي: **admin@openbooks.eg / Admin123!@#**
+الدخول التجريبي: **admin@msfactory.eg / Admin123!@#**
 
 > `uvicorn` مش على PATH — استخدم `python -m uvicorn` دايماً.
 
 ## الإعدادات (متغيرات البيئة)
 
-كل الإعدادات لها قيم افتراضية للتطوير، وتُضبط في الإنتاج ببادئة `OPENBOOKS_`:
+كل الإعدادات لها قيم افتراضية للتطوير، وتُضبط في الإنتاج ببادئة `MSFACTORY_`:
 
 | المتغير | الوصف |
 |---|---|
-| `OPENBOOKS_ENVIRONMENT` | `production` لتشغيل ضوابط الإنتاج |
-| `OPENBOOKS_SECRET_KEY` | مفتاح سري قوي (٣٢ حرف على الأقل في الإنتاج) |
-| `OPENBOOKS_DATABASE_URL` | رابط قاعدة البيانات (PostgreSQL) |
-| `OPENBOOKS_REDIS_URL` | Redis لتحديد معدل الطلبات (اختياري — يفشل بأمان) |
-| `OPENBOOKS_CORS_ORIGINS` | الأصول المسموحة، مفصولة بفواصل |
+| `MSFACTORY_ENVIRONMENT` | `production` لتشغيل ضوابط الإنتاج |
+| `MSFACTORY_SECRET_KEY` | مفتاح سري قوي (٣٢ حرف على الأقل في الإنتاج) |
+| `MSFACTORY_DATABASE_URL` | رابط قاعدة البيانات (PostgreSQL) |
+| `MSFACTORY_REDIS_URL` | Redis لتحديد معدل الطلبات (اختياري — يفشل بأمان) |
+| `MSFACTORY_CORS_ORIGINS` | الأصول المسموحة، مفصولة بفواصل |
 
 ## الاختبارات
 
 ```bash
-OPENBOOKS_LOGIN_RATE_LIMIT_PER_MINUTE=1000 \
-OPENBOOKS_RATE_LIMIT_PER_MINUTE=5000 \
+MSFACTORY_LOGIN_RATE_LIMIT_PER_MINUTE=1000 \
+MSFACTORY_RATE_LIMIT_PER_MINUTE=5000 \
 python -m pytest
 ```
 

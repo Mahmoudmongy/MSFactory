@@ -1,4 +1,4 @@
-# خطة OpenBooks — الطريق من النسخة الحالية للتطبيق الجاهز
+# خطة MS-Factory — الطريق من النسخة الحالية للتطبيق الجاهز
 
 > مستند مكتوب لصاحب المشروع (مش للمبرمجين). كل مرحلة مستقلة، وكل واحدة
 > بتسلّم حاجة تقدر تشوفها وتجرّبها.
@@ -81,16 +81,13 @@
 
 **الهدف:** الكود على GitHub، والتطبيق على لينك دائم تقدر تفتحه من أي موبايل.
 
-1. **GitHub** (محتاج منك حاجتين):
-   - توكن جديد بصلاحية `repo`.
-   - اسم المستودع (مثلاً `openbooks`).
-   - اللي هعمل أنا: أرفع الفرع `feat/openbooks-accounting-app` وأفتح PR.
+1. ~~**GitHub**~~ ✅ **تم الرفع** على `Mahmoudmongy/MS.Factory` (فرع `main`).
 2. **Supabase** (خطوات بسيطة):
    - تعمل مشروع جديد على supabase.com.
    - من زر **Connect** تنسخ **Session pooler** (منفذ **5432**).
      > **مهم:** نستخدم **Session mode** مش Transaction mode، لأن Transaction
      > mode مش بيدعم Prepared Statements وده هيكسر التطبيق.
-   - نضبط `OPENBOOKS_DATABASE_URL` على الرابط ده.
+   - نضبط `MSFACTORY_DATABASE_URL` على الرابط ده.
 3. **ترحيل البيانات**: نشغّل `alembic upgrade head` ثم `python -m app.seed`.
 4. **السيرفر**: نشر على سيرفر صغير (Docker موجود جاهز).
 5. **Cloudflare**: نوجّه الدومين و SSL.
@@ -103,7 +100,7 @@
 
 **الهدف:** نأمّن النظام قبل ما نوسّع.
 
-- **أسرار الإنتاج**: مفتاح سري قوي (`OPENBOOKS_SECRET_KEY`) + `OPENBOOKS_ENVIRONMENT=production`.
+- **أسرار الإنتاج**: مفتاح سري قوي (`MSFACTORY_SECRET_KEY`) + `MSFACTORY_ENVIRONMENT=production`.
 - **نسخ احتياطي تلقائي**: سكربت `scripts/backup.sh` موجود — نجدوله يومياً.
 - **Redis** (Upstash من Cloudflare) لتحديد معدل الطلبات. *ملاحظة: النظام بيشتغل
   من غيره (fails open)، فمش عاجل.*

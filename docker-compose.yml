@@ -2,13 +2,13 @@ services:
   db:
     image: postgres:17-alpine
     environment:
-      POSTGRES_USER: openbooks
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-openbooks_dev_pw}
-      POSTGRES_DB: openbooks
+      POSTGRES_USER: msfactory
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-msfactory_dev_pw}
+      POSTGRES_DB: msfactory
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U openbooks"]
+      test: ["CMD-SHELL", "pg_isready -U msfactory"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -27,11 +27,11 @@ services:
   api:
     build: .
     environment:
-      OPENBOOKS_ENVIRONMENT: production
-      OPENBOOKS_SECRET_KEY: ${OPENBOOKS_SECRET_KEY:?set a strong secret}
-      OPENBOOKS_DATABASE_URL: postgresql+psycopg://openbooks:${POSTGRES_PASSWORD:-openbooks_dev_pw}@db:5432/openbooks
-      OPENBOOKS_REDIS_URL: redis://redis:6379/0
-      OPENBOOKS_CORS_ORIGINS: ${OPENBOOKS_CORS_ORIGINS:-*}
+      MSFACTORY_ENVIRONMENT: production
+      MSFACTORY_SECRET_KEY: ${MSFACTORY_SECRET_KEY:?set a strong secret}
+      MSFACTORY_DATABASE_URL: postgresql+psycopg://msfactory:${POSTGRES_PASSWORD:-msfactory_dev_pw}@db:5432/msfactory
+      MSFACTORY_REDIS_URL: redis://redis:6379/0
+      MSFACTORY_CORS_ORIGINS: ${MSFACTORY_CORS_ORIGINS:-*}
     ports:
       - "8000:8000"
     depends_on:

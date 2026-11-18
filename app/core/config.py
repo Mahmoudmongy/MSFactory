@@ -13,9 +13,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_prefix="OPENBOOKS_", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", env_prefix="MSFACTORY_", extra="ignore")
 
-    app_name: str = "OpenBooks"
+    app_name: str = "MS-Factory"
     environment: str = "development"
     debug: bool = False
 
@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     argon2_parallelism: int = 4
 
     # Database
-    database_url: str = "postgresql+psycopg://openbooks:openbooks_dev_pw@127.0.0.1:5432/openbooks"
+    database_url: str = "postgresql+psycopg://msfactory:msfactory_dev_pw@127.0.0.1:5432/msfactory"
     db_pool_size: int = 10
     db_max_overflow: int = 20
     db_echo: bool = False
@@ -56,10 +56,10 @@ class Settings(BaseSettings):
         if self.is_production:
             if self.secret_key == "dev-only-secret-change-in-production":
                 raise ValueError(
-                    "OPENBOOKS_SECRET_KEY must be set to a strong unique value in production"
+                    "MSFACTORY_SECRET_KEY must be set to a strong unique value in production"
                 )
             if len(self.secret_key) < 32:
-                raise ValueError("OPENBOOKS_SECRET_KEY must be at least 32 characters in production")
+                raise ValueError("MSFACTORY_SECRET_KEY must be at least 32 characters in production")
         return self
 
 
