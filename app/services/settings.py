@@ -29,6 +29,9 @@ EDITABLE_SETTINGS = {
     "tax_number",
     "address",
     "phone",
+    "costing_method",  # fifo | weighted_average
+    "app_name",
+    "vat_enabled",
 }
 
 
@@ -54,6 +57,13 @@ class SettingsService:
         unknown = set(values) - EDITABLE_SETTINGS
         if unknown:
             raise ValidationError(f"Unknown setting(s): {', '.join(sorted(unknown))}")
+        if "costing_method" in values:
+            from ..services.inventory import COSTING_METHODS
+
+            if values["costing_method"] not in COSTING_METHODS:
+                raise ValidationError(
+                    f"طريقة التكلفة يجب أن تكون إحدى: {', '.join(COSTING_METHODS)}"
+                )
         for key, value in values.items():
             self.settings.set(key, str(value))
         self.audit.record(

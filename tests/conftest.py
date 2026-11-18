@@ -1,21 +1,80 @@
 """Test fixtures: a transactional database session and an HTTP client.
 
-Each test runs against the real PostgreSQL schema inside a transaction that is
-rolled back afterwards, so tests exercise genuine constraints and SQL rather
-than a mock.
+Tests run against real PostgreSQL and truncate tables between cases, so they
+must never touch a live database. The environment is redirected to a dedicated
+test database *before* the application is imported, and a guard refuses to run
+if the two ever point at the same place — a mistaken test run must not be able
+to delete a customer's books.
 """
 from __future__ import annotations
 
+import os
+import urllib.parse
+
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import text
 
-from app.core.config import settings
-from app.db.base import Base
-from app.db.session import SessionLocal, engine
-from app.main import app
 
-TEST_DATABASE_URL = settings.database_url
+def _load_dotenv() -> None:
+    """Load ``.env`` into the environment so the derivation below sees it.
+
+    pydantic-settings reads ``.env`` into the Settings object, not into
+    ``os.environ``, so a value set only there would be invisible here.
+    """
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+    if not os.path.exists(path):
+        return
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            os.environ.setdefault(key.strip(), value.strip())
+
+
+def _test_database_url() -> str:
+    """Derive the test database from the configured one.
+
+    ``.../postgres`` becomes ``.../msfactory_test``. A dedicated
+    ``MSFACTORY_TEST_DATABASE_URL`` overrides the derivation entirely.
+    """
+    _load_dotenv()
+    override = os.environ.get("MSFACTORY_TEST_DATABASE_URL")
+    if override:
+        return override
+    configured = os.environ.get("MSFACTORY_DATABASE_URL", "")
+    if not configured:
+        return "postgresql+psycopg://msfactory:msfactory_dev_pw@127.0.0.1:5432/msfactory_test"
+    parts = urllib.parse.urlsplit(configured)
+    return urllib.parse.urlunsplit(parts._replace(path="/msfactory_test"))
+
+
+TEST_DATABASE_URL = _test_database_url()
+os.environ["MSFACTORY_DATABASE_URL"] = TEST_DATABASE_URL
+
+from fastapi.testclient import TestClient  # noqa: E402
+from sqlalchemy import text  # noqa: E402
+
+from app.core.config import settings  # noqa: E402
+from app.db.base import Base  # noqa: E402
+from app.db.session import SessionLocal, engine  # noqa: E402
+from app.main import app  # noqa: E402
+
+
+def _database_name(url: str) -> str:
+    return urllib.parse.urlsplit(url).path.lstrip("/")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _refuse_to_run_on_live_data():
+    """Abort if the test URL resolves to anything other than a ``*_test`` database."""
+    name = _database_name(settings.database_url)
+    if not name.endswith("_test"):
+        pytest.exit(
+            f"Refusing to run: test database '{name}' does not end in '_test'. "
+            "Set MSFACTORY_TEST_DATABASE_URL to a disposable database.",
+            returncode=1,
+        )
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -45,7 +104,9 @@ def _clean_business_tables():
     with engine.begin() as conn:
         conn.execute(
             text(
-                "TRUNCATE journal_lines, journal_entries, payment_allocations, payments, "
+                "TRUNCATE stock_consumptions, stock_layers, stock_movements, item_variants, "
+                "items, item_groups, warehouses, units_of_measure, "
+                "journal_lines, journal_entries, payment_allocations, payments, "
                 "invoice_lines, invoices, contacts, tax_codes, company_settings, sequences, "
                 "fiscal_periods, audit_logs, idempotency_keys, refresh_tokens, memberships, "
                 "accounts, companies, users RESTART IDENTITY CASCADE"

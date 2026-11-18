@@ -20,6 +20,8 @@ CHART_OF_ACCOUNTS = [
     ("1020", "Bank Account", "الحساب البنكي", "asset", "1000"),
     ("1100", "Accounts Receivable", "العملاء (مدينون)", "asset", "1000"),
     ("1200", "Inventory", "المخزون", "asset", "1000"),
+    ("1210", "Damaged Inventory", "مخزون هالك", "asset", "1000"),
+    ("1220", "Work in Progress", "إنتاج تحت التشغيل", "asset", "1000"),
     ("1300", "VAT Receivable", "ضريبة القيمة المضافة (مدخلات)", "asset", "1000"),
     ("1400", "Fixed Assets", "الأصول الثابتة", "asset", "1000"),
     ("1500", "Accumulated Depreciation", "مجمع الإهلاك", "asset", "1000"),
@@ -40,7 +42,28 @@ CHART_OF_ACCOUNTS = [
     ("5300", "Rent", "الإيجارات", "expense", "5000"),
     ("5400", "Utilities", "المرافق والخدمات", "expense", "5000"),
     ("5500", "Depreciation Expense", "مصروف الإهلاك", "expense", "5000"),
+    ("5600", "Inventory Shrinkage", "فقد/هالك المخزون", "expense", "5000"),
+    ("5700", "Manufacturing Overhead", "تكاليف صناعية غير مباشرة", "expense", "5000"),
+    ("5800", "Bank Charges", "مصاريف بنكية وعمولات", "expense", "5000"),
     ("5900", "General Expenses", "مصروفات عمومية", "expense", "5000"),
+]
+
+# Default units a factory needs. Quantities are decimal, so متر and كيلو work.
+DEFAULT_UNITS = [
+    ("PCS", "Piece", "قطعة"),
+    ("MTR", "Metre", "متر"),
+    ("KGM", "Kilogram", "كيلو"),
+    ("LTR", "Litre", "لتر"),
+    ("BOX", "Box", "علبة"),
+    ("SET", "Set", "طقم"),
+]
+
+DEFAULT_WAREHOUSES = [
+    ("MAIN", "Main Warehouse", "المخزن الرئيسي", None, True),
+    ("RAW", "Raw Materials", "مستلزمات", "MAIN", False),
+    ("FABRIC", "Fabric", "قماش", "MAIN", False),
+    ("FG", "Finished Goods", "منتج نهائي", "MAIN", False),
+    ("DMG", "Damaged", "هالك المخزن", "MAIN", False),
 ]
 
 DEFAULT_SETTINGS = {
@@ -50,6 +73,9 @@ DEFAULT_SETTINGS = {
     "fiscal_year_start": "01-01",
     "invoice_terms_days": "30",
     "invoice_footer": "",
+    "app_name": "MS-Factory",
+    "costing_method": "fifo",
+    "vat_enabled": "1",
 }
 
 TAX_CODES = [
@@ -70,7 +96,7 @@ def provision_company(
     role: str = "owner",
 ) -> Company:
     """Create a company's chart of accounts, tax codes, settings and owner."""
-    from ..db.models import Account
+    from ..db.models import Account, UnitOfMeasure, Warehouse
 
     db.add(company)
     db.flush()
@@ -90,6 +116,27 @@ def provision_company(
         )
         accounts.add(account)
         by_code[code] = account
+
+    units: dict[str, UnitOfMeasure] = {}
+    for code, name, name_ar in DEFAULT_UNITS:
+        unit = UnitOfMeasure(company_id=company.id, code=code, name=name, name_ar=name_ar)
+        db.add(unit)
+        db.flush()
+        units[code] = unit
+
+    warehouses: dict[str, Warehouse] = {}
+    for code, name, name_ar, parent, is_group in DEFAULT_WAREHOUSES:
+        warehouse = Warehouse(
+            company_id=company.id,
+            code=code,
+            name=name,
+            name_ar=name_ar,
+            is_group=is_group,
+            parent_id=warehouses[parent].id if parent else None,
+        )
+        db.add(warehouse)
+        db.flush()
+        warehouses[code] = warehouse
 
     for name, name_ar, rate, kind, account_code in TAX_CODES:
         db.add(

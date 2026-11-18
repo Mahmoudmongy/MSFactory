@@ -17,6 +17,19 @@ from .accounting import (
     Sequence,
 )
 from .identity import Company, CompanySetting, Membership, RefreshToken, User
+from .inventory import (
+    INBOUND_KINDS,
+    ITEM_TYPES,
+    MOVEMENT_KINDS,
+    Item,
+    ItemGroup,
+    ItemVariant,
+    StockConsumption,
+    StockLayer,
+    StockMovement,
+    UnitOfMeasure,
+    Warehouse,
+)
 from .operations import (
     Contact,
     IdempotencyKey,
@@ -34,6 +47,9 @@ __all__ = [
     "CASH_CODES",
     "COGS_CODE",
     "DEBIT_NORMAL_TYPES",
+    "INBOUND_KINDS",
+    "ITEM_TYPES",
+    "MOVEMENT_KINDS",
     "SALES_CODE",
     "VAT_PAYABLE_CODE",
     "VAT_RECEIVABLE_CODE",
@@ -46,6 +62,9 @@ __all__ = [
     "IdempotencyKey",
     "Invoice",
     "InvoiceLine",
+    "Item",
+    "ItemGroup",
+    "ItemVariant",
     "JournalEntry",
     "JournalLine",
     "Membership",
@@ -53,6 +72,11 @@ __all__ = [
     "PaymentAllocation",
     "RefreshToken",
     "Sequence",
+    "StockConsumption",
+    "StockLayer",
+    "StockMovement",
     "TaxCode",
+    "UnitOfMeasure",
     "User",
+    "Warehouse",
 ]

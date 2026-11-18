@@ -13,7 +13,10 @@ from app.db.base import Base
 import app.db.models  # noqa: F401  (populates Base.metadata)
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# ConfigParser treats "%" as interpolation syntax, and a URL-encoded password
+# (e.g. "%40" for "@") would raise. Escape it for the ini value; the real URL
+# used below is untouched.
+config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
