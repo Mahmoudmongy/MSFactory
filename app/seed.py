@@ -1,73 +1,103 @@
-"""Seed the standard chart of accounts, default settings and demo user."""
+"""Create a demo company with realistic Egyptian data.
+
+Usage: ``python -m app.seed``
+Idempotent: does nothing if the demo user already exists.
+"""
+from __future__ import annotations
+
+from datetime import date
+from decimal import Decimal
+
 from sqlalchemy import select
-from sqlalchemy.orm import Session
 
-from .models import Account, Setting, TaxCode, User
-from .security import hash_password
+from .db.models import Company, Contact, User
+from .db.session import SessionLocal
+from .repositories.core import AccountRepository
+from .services.auth import AuthService
+from .services.invoices import InvoiceService
+from .services.onboarding import provision_company
+from .services.payments import PaymentService
 
-# code, name (en), name (ar), type, parent code
-CHART = [
-    ("1000", "Assets", "الأصول", "asset", None),
-    ("1100", "Accounts Receivable", "العملاء (مدينون)", "asset", "1000"),
-    ("1200", "Cash on Hand", "النقدية بالصندوق", "asset", "1000"),
-    ("1210", "Bank Account", "الحساب البنكي", "asset", "1000"),
-    ("1300", "Inventory", "المخزون", "asset", "1000"),
-    ("1400", "Fixed Assets", "الأصول الثابتة", "asset", "1000"),
-    ("2000", "Liabilities", "الالتزامات", "liability", None),
-    ("2100", "Accounts Payable", "الموردون (دائنون)", "liability", "2000"),
-    ("2200", "VAT Payable", "ضريبة القيمة المضافة", "liability", "2000"),
-    ("3000", "Equity", "حقوق الملكية", "equity", None),
-    ("3100", "Owner's Capital", "رأس المال", "equity", "3000"),
-    ("3200", "Retained Earnings", "الأرباح المحتجزة", "equity", "3000"),
-    ("4000", "Revenue", "الإيرادات", "income", None),
-    ("4100", "Sales", "المبيعات", "income", "4000"),
-    ("4200", "Other Income", "إيرادات أخرى", "income", "4000"),
-    ("5000", "Expenses", "المصروفات", "expense", None),
-    ("5100", "Cost of Goods Sold", "تكلفة البضاعة المباعة", "expense", "5000"),
-    ("5200", "Salaries", "الرواتب والأجور", "expense", "5000"),
-    ("5300", "Rent", "الإيجارات", "expense", "5000"),
-    ("5400", "Utilities", "المرافق والخدمات", "expense", "5000"),
-    ("5900", "General Expenses", "مصروفات عمومية", "expense", "5000"),
-]
-
-DEFAULTS = {
-    "company_name": "شركتي / My Company",
-    "currency": "EGP",
-    "vat_rate": "14",
-    "fiscal_year_start": "01-01",
-}
+DEMO_EMAIL = "admin@openbooks.eg"
+DEMO_PASSWORD = "Admin123!@#"
 
 
-def seed(db: Session) -> None:
-    if db.scalar(select(Account).limit(1)):
-        return
+def seed() -> None:
+    db = SessionLocal()
+    try:
+        if db.scalar(select(User).where(User.email == DEMO_EMAIL)):
+            print("Demo data already present; skipping.")
+            return
 
-    by_code: dict[str, Account] = {}
-    for code, name, name_ar, type_, parent in CHART:
-        account = Account(
-            code=code,
-            name=name,
-            name_ar=name_ar,
-            type=type_,
-            is_group=parent is None,
-            parent_id=by_code[parent].id if parent else None,
+        auth = AuthService(db)
+        user = auth.register(email=DEMO_EMAIL, password=DEMO_PASSWORD, full_name="مدير النظام")
+        company = Company(
+            name="شركة النور للتجارة",
+            legal_name="شركة النور للتجارة والتوزيع",
+            tax_number="123-456-789",
+            country="EG",
+            base_currency="EGP",
         )
-        db.add(account)
-        db.flush()
-        by_code[code] = account
+        provision_company(db, company=company, owner_id=user.id, role="owner")
 
-    db.add(TaxCode(name="VAT 14%", rate=14, account_id=by_code["2200"].id))
-    db.add(TaxCode(name="Zero Rated", rate=0, account_id=None))
+        contacts = [
+            ("مؤسسة الأمل التجارية", "customer", "01001234567"),
+            ("شركة الرياض للمقاولات", "customer", "01109876543"),
+            ("مورد الخامات المتحدة", "supplier", "01223344556"),
+        ]
+        created = {}
+        for name, kind, phone in contacts:
+            contact = Contact(name=name, kind=kind, phone=phone, tax_number="", payment_terms_days=30)
+            contact.company_id = company.id
+            db.add(contact)
+            db.flush()
+            created[name] = contact
 
-    for key, value in DEFAULTS.items():
-        db.add(Setting(key=key, value=value))
+        accounts = AccountRepository(db, company.id)
+        sales_invoices = InvoiceService(db, company.id, user.id)
+        cash = accounts.by_code("1010")
+        bank = accounts.by_code("1020")
 
-    db.add(
-        User(
-            username="admin",
-            full_name="مدير النظام",
-            password_hash=hash_password("admin123"),
-            role="admin",
+        sales_invoices.create(
+            kind="sales",
+            contact_id=created["مؤسسة الأمل التجارية"].id,
+            issue_date=date(2026, 10, 1),
+            due_date=date(2026, 10, 31),
+            lines=[
+                {"description": "توريد أجهزة", "quantity": 10, "unit_price": 2500, "tax_rate": 14},
+                {"description": "خدمة تركيب", "quantity": 1, "unit_price": 5000, "tax_rate": 14},
+            ],
+            notes="عرض سعر معتمد",
         )
-    )
-    db.commit()
+        sales_invoices.create(
+            kind="purchase",
+            contact_id=created["مورد الخامات المتحدة"].id,
+            issue_date=date(2026, 10, 5),
+            due_date=date(2026, 11, 5),
+            lines=[{"description": "شراء خامات", "quantity": 100, "unit_price": 100, "tax_rate": 14}],
+        )
+        payments = PaymentService(db, company.id, user.id)
+        payments.create(
+            kind="receive",
+            contact_id=created["مؤسسة الأمل التجارية"].id,
+            payment_date=date(2026, 10, 15),
+            amount=Decimal("20000"),
+            bank_account_id=bank.id,
+            reference="تحويل بنكي",
+        )
+        payments.create(
+            kind="spend",
+            contact_id=created["مورد الخامات المتحدة"].id,
+            payment_date=date(2026, 10, 20),
+            amount=Decimal("5000"),
+            bank_account_id=cash.id,
+            reference="دفعة نقدية",
+        )
+        db.commit()
+        print(f"Demo ready — {DEMO_EMAIL} / {DEMO_PASSWORD}")
+    finally:
+        db.close()
+
+
+if __name__ == "__main__":
+    seed()

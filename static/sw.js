@@ -1,24 +1,67 @@
-const CACHE = "openbooks-v1";
-const ASSETS = ["/", "/static/styles.css", "/static/app.js", "/static/icon.svg", "/manifest.webmanifest"];
+/* Service worker: keeps the app shell available offline so the PWA opens even
+ * on a flaky mobile connection.
+ *
+ * Strategy is network-first for everything it handles, falling back to the
+ * cached shell. That keeps the deployed app authoritative (a stale frontend
+ * against a newer API is a real failure mode) while still giving an offline
+ * launch. API responses are never cached: a stale balance is worse than none. */
 
-self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));
-});
+const CACHE = "openbooks-shell-v3";
+const SHELL = ["/", "/static/index.html", "/static/styles.css", "/static/app.js", "/static/icon.svg"];
 
-self.addEventListener("activate", (e) => {
-  e.waitUntil(
-    caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+/** Cache lookups ignore the ?v= cache-buster so one entry serves all versions. */
+const cacheKey = (request) => {
+  const url = new URL(request.url);
+  url.search = "";
+  return url.href;
+};
+
+self.addEventListener("install", (event) => {
+  event.waitUntil(
+    caches
+      .open(CACHE)
+      .then((cache) => Promise.allSettled(SHELL.map((path) => cache.add(path))))
+      .then(() => self.skipWaiting())
   );
 });
 
-self.addEventListener("fetch", (e) => {
-  const url = new URL(e.request.url);
-  if (url.pathname.startsWith("/api/")) return; // always live for API
-  e.respondWith(
-    caches.match(e.request).then((cached) => cached || fetch(e.request).then((res) => {
-      const copy = res.clone();
-      caches.open(CACHE).then((c) => c.put(e.request, copy));
-      return res;
-    }).catch(() => cached))
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    caches
+      .keys()
+      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key))))
+      .then(() => self.clients.claim())
+  );
+});
+
+self.addEventListener("fetch", (event) => {
+  const { request } = event;
+  if (request.method !== "GET") return;
+
+  const url = new URL(request.url);
+  if (url.origin !== self.location.origin) return;
+  if (url.pathname.startsWith("/api/")) return;
+
+  event.respondWith(
+    fetch(request)
+      .then((response) => {
+        if (response.ok && response.type === "basic") {
+          const copy = response.clone();
+          caches.open(CACHE).then((cache) => cache.put(cacheKey(request), copy));
+        }
+        return response;
+      })
+      .catch(async () => {
+        const cached = await caches.match(cacheKey(request));
+        if (cached) return cached;
+        if (request.mode === "navigate") {
+          const shell = await caches.match("/static/index.html");
+          if (shell) return shell;
+        }
+        return new Response("غير متصل بالإنترنت", {
+          status: 503,
+          headers: { "Content-Type": "text/plain; charset=utf-8" },
+        });
+      })
   );
 });

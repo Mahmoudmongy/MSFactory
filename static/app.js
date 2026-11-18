@@ -1,723 +1,1598 @@
-/* OpenBooks — single-page mobile accounting UI (no build step). */
-"use strict";
+/* OpenBooks frontend.
+ *
+ * Single-page, hash-routed, no build step: the whole app is one ES module so it
+ * can be served straight from /static and installed as a PWA. Structure:
+ *   store    — tokens, session, cached lookups
+ *   api      — fetch wrapper with auth, refresh-on-401 and error normalisation
+ *   ui       — tiny DOM helpers (el, fmt, toast, sheet)
+ *   screens  — one render function per route
+ */
 
-const state = {
-  token: localStorage.getItem("token") || "",
+// ---------------------------------------------------------------- store
+
+const STORAGE_KEY = "openbooks.session";
+
+const store = {
+  session: null,
   user: null,
-  route: "dashboard",
-  accounts: [],
-  contacts: [],
-  settings: {},
+  memberships: [],
+  companyId: null,
+  cache: { accounts: null, contacts: null, settings: null },
+
+  load() {
+    try {
+      this.session = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+    } catch {
+      this.session = null;
+    }
+    return this.session;
+  },
+
+  save(session) {
+    this.session = session;
+    if (session) localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
+    else localStorage.removeItem(STORAGE_KEY);
+  },
+
+  get accessToken() {
+    return this.session?.access_token || null;
+  },
+
+  get company() {
+    return this.memberships.find((m) => m.company.id === this.companyId)?.company || null;
+  },
+
+  get role() {
+    return this.memberships.find((m) => m.company.id === this.companyId)?.role || "";
+  },
+
+  can(action) {
+    const role = this.role;
+    if (role === "owner" || role === "admin") return true;
+    if (role === "accountant") return !["company.manage", "member.manage"].includes(action);
+    if (role === "viewer") return action.endsWith(".view") || action === "report.view";
+    return false;
+  },
+
+  reset() {
+    this.user = null;
+    this.memberships = [];
+    this.companyId = null;
+    this.cache = { accounts: null, contacts: null };
+    this.save(null);
+  },
 };
 
-/* ---------------- helpers ---------------- */
-const $ = (sel, root = document) => root.querySelector(sel);
-const el = (html) => {
-  const t = document.createElement("template");
-  t.innerHTML = html.trim();
-  return t.content.firstElementChild;
-};
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const num = (v) => Number(v || 0);
-const fmt = (v) => num(v).toLocaleString("en-EG", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const today = () => new Date().toISOString().slice(0, 10);
+// ---------------------------------------------------------------- api
 
-function toast(msg, isErr = false) {
-  const t = $("#toast");
-  t.textContent = msg;
-  t.className = "toast show" + (isErr ? " err" : "");
-  clearTimeout(toast._t);
-  toast._t = setTimeout(() => (t.className = "toast"), 2600);
-}
-
-async function api(path, options = {}) {
-  const res = await fetch("/api" + path, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(state.token ? { Authorization: "Bearer " + state.token } : {}),
-      ...(options.headers || {}),
-    },
-  });
-  if (res.status === 401) {
-    logout();
-    throw new Error("انتهت الجلسة، سجّل الدخول مرة أخرى");
+class ApiError extends Error {
+  constructor(message, status, code) {
+    super(message);
+    this.status = status;
+    this.code = code;
   }
-  if (res.status === 204) return null;
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.detail || "حدث خطأ غير متوقع");
-  return data;
 }
 
-function sheet(title, contentNode) {
-  const root = $("#sheet-root");
-  const backdrop = el(`<div class="sheet-backdrop"></div>`);
-  const box = el(`
-    <div class="sheet">
-      <div class="sheet-head"><h3>${esc(title)}</h3><button class="close">✕</button></div>
-    </div>`);
-  box.append(contentNode);
-  backdrop.append(box);
-  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) close(); });
-  box.querySelector(".close").addEventListener("click", close);
-  root.append(backdrop);
-  function close() { backdrop.remove(); }
+let refreshing = null;
+
+async function api(path, { method = "GET", body, headers = {}, raw = false } = {}) {
+  const requestHeaders = { ...headers };
+  if (body !== undefined) requestHeaders["Content-Type"] = "application/json";
+  if (store.accessToken) requestHeaders.Authorization = `Bearer ${store.accessToken}`;
+  if (store.companyId) requestHeaders["X-Company-Id"] = String(store.companyId);
+
+  const response = await fetch(`/api/v1${path}`, {
+    method,
+    headers: requestHeaders,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+
+  // A single in-flight refresh is shared by all concurrent 401s.
+  if (response.status === 401 && store.session?.refresh_token && !path.startsWith("/auth/")) {
+    refreshing =
+      refreshing ||
+      fetch("/api/v1/auth/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: store.session.refresh_token }),
+      })
+        .then(async (res) => {
+          if (!res.ok) throw new ApiError("انتهت الجلسة، من فضلك سجّل الدخول مرة أخرى", 401, "session_expired");
+          store.save(await res.json());
+          return true;
+        })
+        .finally(() => {
+          refreshing = null;
+        });
+
+    await refreshing;
+    return api(path, { method, body, headers, raw });
+  }
+
+  if (response.status === 204) return null;
+
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = payload?.detail;
+    const message =
+      (typeof detail === "string" && detail) ||
+      detail?.message ||
+      (Array.isArray(detail) && detail[0]?.msg) ||
+      "حدث خطأ غير متوقع";
+    const code = detail?.code || (Array.isArray(detail) ? "validation_error" : "error");
+    throw new ApiError(message, response.status, code);
+  }
+  return raw ? response : payload;
+}
+
+/** Deterministic idempotency key so a retried submit cannot double-post. */
+function idempotencyKey(prefix, payload) {
+  const seed = `${prefix}:${store.companyId}:${JSON.stringify(payload)}`;
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) | 0;
+  return `${prefix}-${Math.abs(hash).toString(36)}`;
+}
+
+// ---------------------------------------------------------------- ui helpers
+
+export const el = (html) => {
+  const template = document.createElement("template");
+  template.innerHTML = html.trim();
+  return template.content.firstElementChild;
+};
+
+export const escapeHtml = (value) =>
+  String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
+
+const CURRENCY = { EGP: "ج.م", SAR: "ر.س", AED: "د.إ", USD: "$", EUR: "€" };
+
+export function money(value, currency) {
+  const amount = Number(value ?? 0);
+  const formatted = new Intl.NumberFormat("ar-EG", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Math.abs(amount));
+  const symbol = CURRENCY[currency || store.company?.base_currency || "EGP"] || "";
+  return `${amount < 0 ? "-" : ""}${formatted} ${symbol}`.trim();
+}
+
+export function date(value) {
+  if (!value) return "—";
+  const parsed = new Date(`${String(value).slice(0, 10)}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return new Intl.DateTimeFormat("ar-EG", { day: "numeric", month: "short", year: "numeric" }).format(parsed);
+}
+
+export function today() {
+  const now = new Date();
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+
+export function toast(message, kind = "") {
+  const node = document.getElementById("toast");
+  node.textContent = message;
+  node.className = `toast toast--show ${kind ? `toast--${kind}` : ""}`;
+  clearTimeout(node._timer);
+  node._timer = setTimeout(() => {
+    node.className = "toast";
+  }, kind === "error" ? 4200 : 2600);
+}
+
+const STATUS_LABELS = {
+  draft: "مسودة",
+  issued: "صادرة",
+  sent: "مرسلة",
+  paid: "مدفوعة",
+  partially_paid: "مدفوعة جزئياً",
+  void: "ملغاة",
+  overdue: "متأخرة",
+};
+
+export const statusLabel = (status) => STATUS_LABELS[status] || status;
+export const statusBadge = (status) =>
+  `<span class="badge badge--${escapeHtml(status)}">${escapeHtml(statusLabel(status))}</span>`;
+
+export function spinner() {
+  return '<div class="spinner" role="status" aria-label="جارٍ التحميل"></div>';
+}
+
+export function emptyState(icon, title, text) {
+  return `<div class="empty"><span class="empty__icon">${icon}</span>
+    <div class="empty__title">${escapeHtml(title)}</div>
+    <div class="empty__text">${escapeHtml(text)}</div></div>`;
+}
+
+/** Bottom sheet used for create/edit forms on mobile. */
+export function openSheet(title, contentNode) {
+  const backdrop = el(`<div class="sheet-backdrop"><div class="sheet">
+      <div class="sheet__handle"></div>
+      <h2 class="sheet__title">${escapeHtml(title)}</h2>
+    </div></div>`);
+  const sheet = backdrop.querySelector(".sheet");
+  sheet.appendChild(contentNode);
+  const close = () => backdrop.remove();
+  backdrop.addEventListener("click", (event) => {
+    if (event.target === backdrop) close();
+  });
+  document.body.appendChild(backdrop);
+  sheet.scrollIntoView({ block: "end" });
   return close;
 }
 
-/* ---------------- auth ---------------- */
-async function login(username, password) {
-  const data = await api("/auth/login", {
-    method: "POST",
-    body: JSON.stringify({ username, password }),
-  });
-  state.token = data.token;
-  state.user = data.user;
-  localStorage.setItem("token", data.token);
-  start();
-}
-
-function logout() {
-  state.token = "";
-  state.user = null;
-  localStorage.removeItem("token");
-  $("#app").classList.add("hidden");
-  $("#login").classList.remove("hidden");
-}
-
-async function boot() {
-  if (!state.token) return;
-  try {
-    state.user = await api("/auth/me");
-    start();
-  } catch { /* token invalid */ }
-}
-
-/* ---------------- shell ---------------- */
-async function start() {
-  $("#login").classList.add("hidden");
-  $("#app").classList.remove("hidden");
-  await refreshLookups();
-  render();
-}
-
-async function refreshLookups() {
-  [state.accounts, state.contacts, state.settings] = await Promise.all([
-    api("/accounts"),
-    api("/contacts"),
-    api("/settings"),
-  ]);
-}
-
-const ROUTES = {
-  dashboard: { title: "لوحة التحكم", render: renderDashboard },
-  invoices: { title: "الفواتير", render: renderInvoices },
-  payments: { title: "المدفوعات", render: renderPayments },
-  contacts: { title: "العملاء والموردون", render: renderContacts },
-  reports: { title: "التقارير", render: renderReports },
-  more: { title: "المزيد", render: renderMore },
-};
-
-async function render() {
-  const route = ROUTES[state.route];
-  $("#page-title").textContent = route.title;
-  document.querySelectorAll("nav.tabbar button").forEach((b) =>
-    b.classList.toggle("active", b.dataset.route === state.route)
-  );
-  const view = $("#view");
-  view.innerHTML = `<div class="empty">جاري التحميل…</div>`;
-  try {
-    await route.render(view);
-  } catch (e) {
-    view.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
-  }
-}
-
-function go(route) {
-  state.route = route;
-  render();
-  window.scrollTo({ top: 0 });
-}
-
-/* ---------------- dashboard ---------------- */
-async function renderDashboard(view) {
-  const d = await api("/reports/dashboard");
-  view.innerHTML = `
-    <div class="grid">
-      <div class="stat"><div class="label">النقدية والبنك</div><div class="value">${fmt(d.cash)}</div></div>
-      <div class="stat"><div class="label">الإيرادات</div><div class="value pos">${fmt(d.income)}</div></div>
-      <div class="stat"><div class="label">المصروفات</div><div class="value neg">${fmt(d.expense)}</div></div>
-      <div class="stat"><div class="label">صافي الربح</div><div class="value ${num(d.net_profit) < 0 ? "neg" : "pos"}">${fmt(d.net_profit)}</div></div>
-    </div>
-    <div class="card" style="margin-top:12px">
-      <h3>المركز المالي</h3>
-      <div class="total-row"><span>إجمالي الأصول</span><b>${fmt(d.assets)}</b></div>
-      <div class="total-row"><span>إجمالي الالتزامات</span><b>${fmt(d.liabilities)}</b></div>
-    </div>
-    <div class="card">
-      <h3>اختصارات</h3>
-      <button class="btn" id="quick-invoice">🧾 فاتورة بيع جديدة</button>
-      <button class="btn ghost" id="quick-payment">💵 تسجيل دفعة</button>
-      <button class="btn ghost" id="quick-report">📊 قائمة الدخل</button>
-    </div>`;
-  $("#quick-invoice").onclick = () => invoiceForm("sales");
-  $("#quick-payment").onclick = () => paymentForm("receive");
-  $("#quick-report").onclick = () => go("reports");
-}
-
-/* ---------------- invoices ---------------- */
-async function renderInvoices(view) {
-  const invoices = await api("/invoices");
-  view.innerHTML = `
-    <div class="row" style="margin-bottom:12px">
-      <button class="btn sm" style="flex:1" id="new-sale">+ فاتورة بيع</button>
-      <button class="btn sm ghost" style="flex:1" id="new-bill">+ فاتورة شراء</button>
-    </div>
-    <div class="list" id="inv-list"></div>`;
-  $("#new-sale").onclick = () => invoiceForm("sales");
-  $("#new-bill").onclick = () => invoiceForm("purchase");
-
-  const list = $("#inv-list");
-  if (!invoices.length) {
-    list.innerHTML = `<div class="empty">لا توجد فواتير بعد</div>`;
-    return;
-  }
-  invoices.forEach((inv) => {
-    const label = inv.kind === "sales" ? "بيع" : "شراء";
-    const badge = inv.status === "paid" ? '<span class="pill ok">مدفوعة</span>'
-      : num(inv.balance) < num(inv.total) ? '<span class="pill warn">مدفوعة جزئياً</span>'
-      : '<span class="pill">مستحقة</span>';
-    const item = el(`
-      <div class="item">
-        <div class="main">
-          <div class="title">${esc(inv.contact_name)} ${badge}</div>
-          <div class="sub">${label} · ${esc(inv.number)} · ${esc(inv.issue_date)}</div>
+export function confirmDialog(message) {
+  return new Promise((resolve) => {
+    const backdrop = el(`<div class="sheet-backdrop"><div class="sheet">
+        <div class="sheet__handle"></div>
+        <p style="margin:4px 0 20px;font-weight:600">${escapeHtml(message)}</p>
+        <div style="display:flex;gap:10px">
+          <button class="btn btn--ghost" style="flex:1" data-no>إلغاء</button>
+          <button class="btn btn--danger" style="flex:1" data-yes>تأكيد</button>
         </div>
-        <div class="amount">${fmt(inv.total)}<div class="sub" style="font-weight:400">متأخر: ${fmt(inv.balance)}</div></div>
-      </div>`);
-    item.onclick = () => showInvoice(inv.id);
-    list.append(item);
+      </div></div>`);
+    backdrop.querySelector("[data-no]").onclick = () => {
+      backdrop.remove();
+      resolve(false);
+    };
+    backdrop.querySelector("[data-yes]").onclick = () => {
+      backdrop.remove();
+      resolve(true);
+    };
+    document.body.appendChild(backdrop);
   });
 }
 
-async function invoiceForm(kind) {
-  const customers = state.contacts.filter((c) => kind === "sales" ? c.kind !== "supplier" : c.kind !== "customer");
-  const revenueAccounts = state.accounts.filter((a) => a.type === (kind === "sales" ? "income" : "expense"));
-  const defaultAccount = revenueAccounts.find((a) => a.code === (kind === "sales" ? "4100" : "5100"));
+// ---------------------------------------------------------------- app shell
 
-  const form = el(`
-    <form>
-      <label>الطرف</label>
-      <select id="f-contact" required>
-        <option value="">— اختر —</option>
-        ${customers.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}
-      </select>
-      <label>تاريخ الفاتورة</label>
-      <input type="date" id="f-date" value="${today()}" required />
-      <label>تاريخ الاستحقاق</label>
-      <input type="date" id="f-due" />
-      <label>البنود</label>
-      <div id="f-lines"></div>
-      <button type="button" class="btn ghost sm" id="add-line" style="width:100%">+ إضافة بند</button>
-      <div class="total-row"><span>الإجمالي قبل الضريبة</span><b id="t-sub">0.00</b></div>
-      <div class="total-row"><span>الضريبة</span><b id="t-tax">0.00</b></div>
-      <div class="total-row grand"><span>الإجمالي</span><b id="t-total">0.00</b></div>
-      <label>ملاحظات</label>
-      <textarea id="f-notes"></textarea>
+const app = document.getElementById("app");
+
+function setScreen(content, { appbar, tabbar, plain } = {}) {
+  app.innerHTML = "";
+  if (appbar) app.appendChild(appbar);
+  const screen = el(`<main class="screen${plain ? " screen--plain" : ""}"></main>`);
+  if (typeof content === "string") screen.innerHTML = content;
+  else screen.appendChild(content);
+  app.appendChild(screen);
+  if (tabbar) app.appendChild(tabbar);
+}
+
+function appbar({ title, subtitle, back, actions = "" }) {
+  return el(`<header class="appbar">
+    ${back ? `<button class="icon-btn" data-nav="${escapeHtml(back)}" aria-label="رجوع">→</button>` : ""}
+    <h1 class="appbar__title">${escapeHtml(title)}
+      ${subtitle ? `<span class="appbar__sub">${escapeHtml(subtitle)}</span>` : ""}</h1>
+    ${actions}
+  </header>`);
+}
+
+const TABS = [
+  { href: "#/dashboard", icon: "🏠", label: "الرئيسية" },
+  { href: "#/invoices", icon: "🧾", label: "الفواتير" },
+  { href: "#/payments", icon: "💵", label: "المدفوعات" },
+  { href: "#/contacts", icon: "👥", label: "العملاء" },
+  { href: "#/reports", icon: "📊", label: "التقارير" },
+];
+
+function tabbar() {
+  const current = location.hash || "#/dashboard";
+  return el(`<nav class="tabbar">${TABS.map(
+    (tab) => `<a class="tabbar__item" href="${tab.href}" ${current.startsWith(tab.href) ? 'aria-current="page"' : ""}>
+        <span class="tabbar__icon">${tab.icon}</span><span>${tab.label}</span></a>`
+  ).join("")}</nav>`);
+}
+
+// ---------------------------------------------------------------- auth screens
+
+function renderAuth(mode = "login") {
+  const isLogin = mode === "login";
+  const view = el(`<div class="auth screen--plain">
+    <div class="auth__logo">
+      <div class="auth__mark">OB</div>
+      <h1 class="auth__title">OpenBooks</h1>
+      <p class="auth__sub">محاسبة سحابية لشركتك — من أي مكان</p>
+    </div>
+    <form novalidate>
+      ${isLogin ? "" : `<div class="field"><label class="field__label" for="full_name">الاسم</label>
+        <input class="input" id="full_name" name="full_name" autocomplete="name" placeholder="محمد أحمد" /></div>`}
+      <div class="field">
+        <label class="field__label" for="email">البريد الإلكتروني</label>
+        <input class="input" id="email" name="email" type="email" inputmode="email" dir="ltr"
+          autocomplete="email" required placeholder="you@company.com" />
+      </div>
+      <div class="field">
+        <label class="field__label" for="password">كلمة المرور</label>
+        <input class="input" id="password" name="password" type="password" dir="ltr"
+          autocomplete="${isLogin ? "current-password" : "new-password"}" required
+          placeholder="${isLogin ? "••••••••" : "8 أحرف على الأقل"}" />
+      </div>
+      ${isLogin ? "" : `<div class="field"><label class="field__label" for="company_name">اسم الشركة</label>
+        <input class="input" id="company_name" name="company_name" required placeholder="شركة النور للتجارة" /></div>
+      <div class="field"><label class="field__label" for="country">الدولة</label>
+        <select class="select" id="country" name="country">
+          <option value="EG" selected>مصر</option><option value="SA">السعودية</option>
+          <option value="AE">الإمارات</option><option value="KW">الكويت</option>
+        </select></div>`}
+      <button class="btn btn--block" type="submit">${isLogin ? "تسجيل الدخول" : "إنشاء الحساب"}</button>
+    </form>
+    <p class="auth__switch">
+      ${isLogin ? "ليس لديك حساب؟" : "لديك حساب بالفعل؟"}
+      <button type="button" data-mode="${isLogin ? "register" : "login"}">
+        ${isLogin ? "أنشئ حساباً جديداً" : "سجّل الدخول"}</button>
+    </p>
+  </div>`);
+
+  view.querySelector("[data-mode]").onclick = (event) => renderAuth(event.target.dataset.mode);
+  view.querySelector("form").onsubmit = async (event) => {
+    event.preventDefault();
+    const form = event.target;
+    const button = form.querySelector("button[type=submit]");
+    const data = Object.fromEntries(new FormData(form));
+    button.disabled = true;
+    button.textContent = "جارٍ...";
+    try {
+      if (isLogin) {
+        store.save(await api("/auth/login", { method: "POST", body: { email: data.email, password: data.password } }));
+      } else {
+        store.save(
+          await api("/auth/register", {
+            method: "POST",
+            body: {
+              email: data.email,
+              password: data.password,
+              full_name: data.full_name,
+              company_name: data.company_name,
+              country: data.country,
+            },
+          })
+        );
+      }
+      await bootstrap();
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+      button.textContent = isLogin ? "تسجيل الدخول" : "إنشاء الحساب";
+    }
+  };
+  setScreen(view, { plain: true });
+}
+
+// ---------------------------------------------------------------- data loading
+
+async function loadAccounts(force = false) {
+  if (!store.cache.accounts || force) store.cache.accounts = await api("/accounts");
+  return store.cache.accounts;
+}
+
+async function loadContacts(force = false) {
+  if (!store.cache.contacts || force) store.cache.contacts = await api("/contacts");
+  return store.cache.contacts;
+}
+
+const contactName = (id) => store.cache.contacts?.find((c) => c.id === id)?.name || `#${id}`;
+
+// ---------------------------------------------------------------- dashboard
+
+async function renderDashboard() {
+  setScreen(spinner(), {
+    appbar: appbar({ title: companyName(), subtitle: store.company?.base_currency }),
+    tabbar: tabbar(),
+  });
+  try {
+    const [data, invoices] = await Promise.all([api("/reports/dashboard"), api("/invoices")]);
+    await loadContacts(); // the recent-invoice list shows contact names
+    const recent = invoices.slice(0, 4);
+    // A partially-paid invoice that is past due is still overdue money, and what
+    // is owed is the outstanding balance — not the invoice total.
+    const overdue = invoices
+      .filter((i) => ["issued", "partially_paid"].includes(i.status) && i.due_date && i.due_date < today())
+      .map((i) => ({ ...i, outstanding: Number(i.total) - Number(i.amount_paid) }))
+      .filter((i) => i.outstanding > 0);
+    const overdueTotal = overdue.reduce((sum, i) => sum + i.outstanding, 0);
+
+    const view = el(`<div>
+      <div class="kpi-grid">
+        <div class="kpi kpi--income"><div class="kpi__label">الإيرادات</div>
+          <div class="kpi__value num">${money(data.income)}</div></div>
+        <div class="kpi kpi--expense"><div class="kpi__label">المصروفات</div>
+          <div class="kpi__value num">${money(data.expense)}</div></div>
+        <div class="kpi"><div class="kpi__label">صافي الربح</div>
+          <div class="kpi__value num">${money(data.net_profit)}</div></div>
+        <div class="kpi kpi--assets"><div class="kpi__label">النقدية</div>
+          <div class="kpi__value num">${money(data.cash)}</div></div>
+      </div>
+
+      ${overdue.length ? `<div class="card" style="border-inline-start:4px solid var(--danger-fg)">
+        <div class="card__head"><h2 class="card__title">⚠️ فواتير متأخرة</h2>
+          <a class="btn btn--ghost btn--sm" href="#/invoices">عرض</a></div>
+        <div class="list__meta">${overdue.length} فاتورة متأخرة بإجمالي
+          <strong class="num">${money(overdueTotal)}</strong></div>
+      </div>` : ""}
+
+      <div class="section-title">أحدث الفواتير</div>
+      <div class="card card--flush">
+        ${recent.length
+          ? `<ul class="list">${recent
+              .map(
+                (invoice) => `<li><a class="list__item" href="#/invoices/${invoice.id}">
+                <div class="list__main">
+                  <div class="list__title">${escapeHtml(contactName(invoice.contact_id))}</div>
+                  <div class="list__meta"><span class="num">${escapeHtml(invoice.number)}</span> · ${date(invoice.issue_date)}</div>
+                </div>
+                <div style="text-align:end">
+                  <div class="list__value num">${money(invoice.total, invoice.currency)}</div>
+                  <div style="margin-top:4px">${statusBadge(invoice.status)}</div>
+                </div></a></li>`
+              )
+              .join("")}</ul>`
+          : emptyState("🧾", "لا توجد فواتير بعد", "ابدأ بإنشاء أول فاتورة بيع")}
+      </div>
+
+      <div class="action-bar">
+        <a class="btn" href="#/invoices/new">＋ فاتورة جديدة</a>
+        <a class="btn btn--ghost" href="#/payments?new=receive">💵 تسجيل دفعة</a>
+      </div>
+    </div>`);
+
+    setScreen(view, {
+      appbar: appbar({
+        title: companyName(),
+        subtitle: `${store.role === "owner" ? "مالك" : store.role} · ${store.memberships.length > 1 ? "اضغط لتبديل الشركة" : ""}`,
+        actions: `<button class="icon-btn" data-action="menu" aria-label="القائمة">☰</button>`,
+      }),
+      tabbar: tabbar(),
+    });
+  } catch (error) {
+    setScreen(emptyState("⚠️", "تعذّر تحميل البيانات", error.message), { tabbar: tabbar() });
+  }
+}
+
+// ---------------------------------------------------------------- invoices
+
+async function renderInvoices() {
+  setScreen(spinner(), { appbar: appbar({ title: "الفواتير" }), tabbar: tabbar() });
+  try {
+    const invoices = await api("/invoices");
+    await loadContacts();
+
+    const rows = invoices
+      .map(
+        (invoice) => `<li><a class="list__item" href="#/invoices/${invoice.id}">
+        <div class="list__main">
+          <div class="list__title">${escapeHtml(contactName(invoice.contact_id))}</div>
+          <div class="list__meta">${escapeHtml(invoice.number)} · ${date(invoice.issue_date)}
+            · ${invoice.kind === "sales" ? "بيع" : "شراء"}</div>
+        </div>
+        <div style="text-align:end">
+          <div class="list__value num">${money(invoice.total, invoice.currency)}</div>
+          <div style="margin-top:4px">${statusBadge(invoice.status)}</div>
+        </div></a></li>`
+      )
+      .join("");
+
+    setScreen(
+      el(`<div>
+        <div class="card card--flush">
+          ${invoices.length ? `<ul class="list">${rows}</ul>` : emptyState("🧾", "لا توجد فواتير", "أنشئ فاتورة بيع أو شراء")}
+        </div>
+        <div class="action-bar"><a class="btn" href="#/invoices/new">＋ فاتورة جديدة</a></div>
+      </div>`),
+      { appbar: appbar({ title: "الفواتير" }), tabbar: tabbar() }
+    );
+  } catch (error) {
+    setScreen(emptyState("⚠️", "خطأ", error.message), { tabbar: tabbar() });
+  }
+}
+
+async function renderInvoiceForm() {
+  const [accounts, contacts] = await Promise.all([loadAccounts(), loadContacts()]);
+  const customers = contacts.filter((c) => c.kind === "customer");
+
+  // Tax rates come from the company's own tax codes, so changing VAT is a
+  // settings edit — not a code change.
+  let taxCodes = [];
+  try {
+    taxCodes = (await loadSettings()).tax_codes.filter((c) => c.is_active);
+  } catch {
+    taxCodes = [];
+  }
+  if (!taxCodes.length) taxCodes = [{ id: 0, name_ar: "بدون ضريبة", rate: 0 }];
+  const defaultRate = taxCodes[0] ? Number(taxCodes[0].rate) : 0;
+
+  const view = el(`<form novalidate>
+    <div class="segment">
+      <button type="button" class="segment__btn" data-kind="sales" aria-pressed="true">فاتورة بيع</button>
+      <button type="button" class="segment__btn" data-kind="purchase" aria-pressed="false">فاتورة شراء</button>
+    </div>
+
+    <div class="card">
+      <div class="field"><label class="field__label" for="contact">العميل / المورد</label>
+        <select class="select" id="contact" required>
+          <option value="">— اختر —</option>
+          ${(customers.length ? customers : contacts)
+            .map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`)
+            .join("")}
+        </select>
+        ${contacts.length ? "" : '<div class="field__hint">لا يوجد عملاء — أضف عميلاً أولاً من تبويب العملاء</div>'}
+      </div>
+      <div class="line-editor__row">
+        <div class="field"><label class="field__label" for="issue_date">تاريخ الفاتورة</label>
+          <input class="input" type="date" id="issue_date" value="${today()}" required /></div>
+        <div class="field"><label class="field__label" for="due_date">تاريخ الاستحقاق</label>
+          <input class="input" type="date" id="due_date" /></div>
+      </div>
+    </div>
+
+    <div class="section-title">بنود الفاتورة</div>
+    <div id="lines"></div>
+    <button type="button" class="btn btn--ghost btn--block" data-add-line>＋ إضافة بند</button>
+
+    <div class="card" style="margin-top:12px">
+      <div class="totals">
+        <div class="totals__row"><span>المجموع</span><span class="num" data-subtotal>0.00</span></div>
+        <div class="totals__row"><span>الضريبة</span><span class="num" data-tax>0.00</span></div>
+        <div class="totals__row totals__row--grand"><span>الإجمالي</span><span class="num" data-total>0.00</span></div>
+      </div>
+    </div>
+
+    <div class="field"><label class="field__label" for="notes">ملاحظات</label>
+      <textarea class="textarea" id="notes" placeholder="اختياري"></textarea></div>
+
+    <div class="action-bar">
       <button class="btn" type="submit">حفظ الفاتورة</button>
-    </form>`);
+      <button class="btn btn--ghost" type="button" data-nav="#/invoices">إلغاء</button>
+    </div>
+  </form>`);
 
-  const linesBox = $("#f-lines", form);
-  const vatRate = num(state.settings.vat_rate);
+  let kind = "sales";
+  const linesHost = view.querySelector("#lines");
 
-  function addLine() {
-    const row = el(`
-      <div class="line-row">
-        <input placeholder="الوصف" class="l-desc" />
-        <input type="number" step="0.01" value="1" class="l-qty" title="الكمية" />
-        <input type="number" step="0.01" value="0" class="l-price" title="السعر" />
-        <input type="number" step="0.01" value="${vatRate}" class="l-tax" title="نسبة الضريبة" />
-        <button type="button" class="del">✕</button>
-      </div>`);
-    row.querySelector(".del").onclick = () => { wrap.remove(); recalc(); };
-    row.querySelectorAll("input").forEach((i) => i.addEventListener("input", recalc));
-    const sel = el(`<select class="l-acc" style="margin-bottom:6px">
-      ${revenueAccounts.map((a) => `<option value="${a.id}" ${defaultAccount && a.id === defaultAccount.id ? "selected" : ""}>${esc(a.code + " " + a.name)}</option>`).join("")}
-    </select>`);
-    const wrap = el(`<div class="inv-line" style="border-bottom:1px dashed var(--line); padding-bottom:8px; margin-bottom:8px"></div>`);
-    wrap.append(sel, row);
-    linesBox.append(wrap);
-    recalc();
+  function addLine(focus = false) {
+    const node = el(`<div class="line-editor">
+      <div class="line-editor__head"><span>بند</span>
+        <button type="button" class="btn btn--ghost btn--sm" data-remove>حذف</button></div>
+      <div class="field"><label class="field__label">الوصف</label>
+        <input class="input" data-description placeholder="وصف البند" /></div>
+      <div class="line-editor__row">
+        <div class="field"><label class="field__label">الكمية</label>
+          <input class="input num" data-quantity type="number" step="0.01" min="0" value="1" inputmode="decimal" /></div>
+        <div class="field"><label class="field__label">سعر الوحدة</label>
+          <input class="input num" data-unit-price type="number" step="0.01" min="0" value="0" inputmode="decimal" /></div>
+      </div>
+      <div class="line-editor__row">
+        <div class="field"><label class="field__label">خصم %</label>
+          <input class="input num" data-discount type="number" step="0.01" min="0" max="100" value="0" inputmode="decimal" /></div>
+        <div class="field"><label class="field__label">ضريبة %</label>
+          <select class="select" data-tax-rate>
+            ${taxCodes
+              .map(
+                (code) =>
+                  `<option value="${Number(code.rate)}" ${
+                    Number(code.rate) === defaultRate ? "selected" : ""
+                  }>${escapeHtml(code.name_ar || code.name)}</option>`
+              )
+              .join("")}
+          </select></div>
+      </div>
+    </div>`);
+    node.querySelector("[data-remove]").onclick = () => {
+      node.remove();
+      recalc();
+    };
+    node.addEventListener("input", recalc);
+    linesHost.appendChild(node);
+    if (focus) node.querySelector("[data-description]").focus();
+  }
+
+  function collect() {
+    return [...linesHost.querySelectorAll(".line-editor")].map((node) => ({
+      description: node.querySelector("[data-description]").value.trim(),
+      quantity: Number(node.querySelector("[data-quantity]").value) || 0,
+      unit_price: Number(node.querySelector("[data-unit-price]").value) || 0,
+      discount_rate: Number(node.querySelector("[data-discount]").value) || 0,
+      tax_rate: Number(node.querySelector("[data-tax-rate]").value) || 0,
+    }));
   }
 
   function recalc() {
-    let sub = 0, tax = 0;
-    linesBox.querySelectorAll(".inv-line").forEach((wrap) => {
-      const qty = num($(".l-qty", wrap).value);
-      const price = num($(".l-price", wrap).value);
-      const rate = num($(".l-tax", wrap).value);
-      const amount = qty * price;
-      sub += amount;
-      tax += (amount * rate) / 100;
-    });
-    $("#t-sub", form).textContent = fmt(sub);
-    $("#t-tax", form).textContent = fmt(tax);
-    $("#t-total", form).textContent = fmt(sub + tax);
+    let subtotal = 0;
+    let tax = 0;
+    for (const line of collect()) {
+      const gross = line.quantity * line.unit_price;
+      const net = gross - gross * (line.discount_rate / 100);
+      subtotal += net;
+      tax += net * (line.tax_rate / 100);
+    }
+    view.querySelector("[data-subtotal]").textContent = money(subtotal);
+    view.querySelector("[data-tax]").textContent = money(tax);
+    view.querySelector("[data-total]").textContent = money(subtotal + tax);
   }
 
-  $("#add-line", form).onclick = addLine;
-  addLine();
+  view.querySelector("[data-add-line]").onclick = () => addLine(true);
+  view.querySelectorAll("[data-kind]").forEach((button) => {
+    button.onclick = () => {
+      kind = button.dataset.kind;
+      view.querySelectorAll("[data-kind]").forEach((b) => b.setAttribute("aria-pressed", String(b === button)));
+    };
+  });
 
-  form.onsubmit = async (e) => {
-    e.preventDefault();
-    const lines = [];
-    linesBox.querySelectorAll(".inv-line").forEach((wrap) => {
-      const desc = $(".l-desc", wrap).value.trim();
-      const qty = num($(".l-qty", wrap).value);
-      const price = num($(".l-price", wrap).value);
-      if (!desc && !price) return;
-      lines.push({
-        description: desc,
-        quantity: qty,
-        unit_price: price,
-        tax_rate: num($(".l-tax", wrap).value),
-        account_id: Number($(".l-acc", wrap).value),
-      });
-    });
-    if (!lines.length) return toast("أضف بنداً واحداً على الأقل", true);
+  view.onsubmit = async (event) => {
+    event.preventDefault();
+    const submit = view.querySelector("button[type=submit]");
+    const contactId = Number(view.querySelector("#contact").value);
+    const lines = collect();
+
+    if (!contactId) return toast("اختر العميل أولاً", "error");
+    if (!lines.length) return toast("أضف بنداً واحداً على الأقل", "error");
+    if (lines.some((line) => line.quantity <= 0)) return toast("الكمية يجب أن تكون أكبر من صفر", "error");
+
     const payload = {
       kind,
-      contact_id: Number($("#f-contact", form).value),
-      issue_date: $("#f-date", form).value,
-      due_date: $("#f-due", form).value || null,
-      notes: $("#f-notes", form).value,
+      contact_id: contactId,
+      issue_date: view.querySelector("#issue_date").value,
+      due_date: view.querySelector("#due_date").value || null,
+      notes: view.querySelector("#notes").value.trim(),
       lines,
     };
-    if (!payload.contact_id) return toast("اختر الطرف", true);
+
+    submit.disabled = true;
+    submit.textContent = "جارٍ الحفظ...";
     try {
-      await api("/invoices", { method: "POST", body: JSON.stringify(payload) });
-      closeSheet();
-      toast("تم حفظ الفاتورة");
-      render();
-    } catch (err) { toast(err.message, true); }
+      const invoice = await api("/invoices", {
+        method: "POST",
+        body: payload,
+        headers: { "Idempotency-Key": idempotencyKey("inv", payload) },
+      });
+      toast(`تم حفظ الفاتورة ${invoice.number}`, "success");
+      location.hash = `#/invoices/${invoice.id}`;
+    } catch (error) {
+      toast(error.message, "error");
+      submit.disabled = false;
+      submit.textContent = "حفظ الفاتورة";
+    }
   };
 
-  const closeSheet = sheet(kind === "sales" ? "فاتورة بيع جديدة" : "فاتورة شراء جديدة", form);
+  addLine();
+  recalc();
+  setScreen(view, { appbar: appbar({ title: "فاتورة جديدة", back: "#/invoices" }) });
 }
 
-async function showInvoice(id) {
-  const inv = await api("/invoices/" + id);
-  const body = el(`
-    <div>
-      <div class="total-row"><span>الطرف</span><b>${esc(inv.contact_name)}</b></div>
-      <div class="total-row"><span>الرقم</span><b>${esc(inv.number)}</b></div>
-      <div class="total-row"><span>التاريخ</span><b>${esc(inv.issue_date)}</b></div>
-      <div class="table-wrap">
+async function renderInvoiceDetail(invoiceId) {
+  setScreen(spinner(), { appbar: appbar({ title: "الفاتورة", back: "#/invoices" }) });
+  try {
+    const [invoice, accounts] = await Promise.all([api(`/invoices/${invoiceId}`), loadAccounts()]);
+    await loadContacts();
+    const outstanding = Number(invoice.total) - Number(invoice.amount_paid);
+    const cashAccounts = accounts.filter((a) => ["1010", "1020"].includes(a.code));
+
+    const view = el(`<div>
+      <div class="card">
+        <div class="card__head">
+          <div><h2 class="card__title">${escapeHtml(invoice.number)}</h2>
+            <div class="list__meta">${escapeHtml(contactName(invoice.contact_id))}</div></div>
+          ${statusBadge(invoice.status)}
+        </div>
+        <div class="totals__row"><span>تاريخ الإصدار</span><span class="num">${date(invoice.issue_date)}</span></div>
+        <div class="totals__row"><span>تاريخ الاستحقاق</span><span class="num">${date(invoice.due_date)}</span></div>
+      </div>
+
+      <div class="section-title">البنود</div>
+      <div class="card card--flush table-wrap">
         <table>
-          <thead><tr><th>الوصف</th><th class="num">كمية</th><th class="num">سعر</th><th class="num">الإجمالي</th></tr></thead>
-          <tbody>
-            ${inv.lines.map((l) => `<tr><td>${esc(l.description)}</td><td class="num">${fmt(l.quantity)}</td><td class="num">${fmt(l.unit_price)}</td><td class="num">${fmt(l.amount)}</td></tr>`).join("")}
-          </tbody>
+          <thead><tr><th>الوصف</th><th class="num">الكمية</th><th class="num">السعر</th><th class="num">الإجمالي</th></tr></thead>
+          <tbody>${invoice.lines
+            .map((line) => {
+              const gross = Number(line.quantity) * Number(line.unit_price);
+              const net = gross - gross * (Number(line.discount_rate) / 100);
+              const total = net + net * (Number(line.tax_rate) / 100);
+              return `<tr><td>${escapeHtml(line.description || "—")}</td>
+                <td class="num">${Number(line.quantity)}</td>
+                <td class="num">${money(line.unit_price)}</td>
+                <td class="num">${money(total)}</td></tr>`;
+            })
+            .join("")}</tbody>
         </table>
       </div>
-      <div class="total-row"><span>الإجمالي قبل الضريبة</span><b>${fmt(inv.subtotal)}</b></div>
-      <div class="total-row"><span>الضريبة</span><b>${fmt(inv.tax_total)}</b></div>
-      <div class="total-row grand"><span>الإجمالي</span><b>${fmt(inv.total)}</b></div>
-      <div class="total-row"><span>المدفوع</span><b>${fmt(inv.amount_paid)}</b></div>
-      <div class="total-row"><span>المتبقي</span><b>${fmt(inv.balance)}</b></div>
-      <button class="btn danger" id="del-inv">حذف الفاتورة</button>
+
+      <div class="card">
+        <div class="totals__row"><span>المجموع</span><span class="num">${money(invoice.subtotal)}</span></div>
+        <div class="totals__row"><span>الضريبة</span><span class="num">${money(invoice.tax_total)}</span></div>
+        <div class="totals__row totals__row--grand"><span>الإجمالي</span><span class="num">${money(invoice.total)}</span></div>
+        <div class="totals__row"><span>المدفوع</span><span class="num">${money(invoice.amount_paid)}</span></div>
+        <div class="totals__row" style="font-weight:700"><span>المتبقي</span><span class="num">${money(outstanding)}</span></div>
+      </div>
+
+      ${invoice.notes ? `<div class="card"><div class="card__title">ملاحظات</div>
+        <p style="margin:8px 0 0;color:var(--ink-700)">${escapeHtml(invoice.notes)}</p></div>` : ""}
+
+      <div class="row-actions">
+        ${invoice.status !== "void" && outstanding > 0 && store.can("payment.manage")
+          ? '<button class="btn" data-pay>💵 تسجيل دفعة</button>' : ""}
+        ${invoice.status !== "void" && store.can("invoice.manage")
+          ? '<button class="btn btn--danger" data-void>إلغاء الفاتورة</button>' : ""}
+      </div>
     </div>`);
-  const closeSheet = sheet("تفاصيل الفاتورة", body);
-  $("#del-inv", body).onclick = async () => {
-    if (!confirm("تأكيد حذف الفاتورة؟")) return;
-    try {
-      await api("/invoices/" + id, { method: "DELETE" });
-      closeSheet();
-      toast("تم الحذف");
-      render();
-    } catch (e) { toast(e.message, true); }
-  };
+
+    const payButton = view.querySelector("[data-pay]");
+    if (payButton) {
+      payButton.onclick = () => {
+        let close = () => {};
+        close = openSheet(
+          "تسجيل دفعة",
+          buildPaymentForm({
+            kind: invoice.kind === "sales" ? "receive" : "spend",
+            contactId: invoice.contact_id,
+            amount: outstanding,
+            cashAccounts,
+            invoiceId: invoice.id,
+            onDone: () => renderInvoiceDetail(invoiceId),
+            onClose: () => close(),
+          })
+        );
+      };
+    }
+
+    const voidButton = view.querySelector("[data-void]");
+    if (voidButton) {
+      voidButton.onclick = async () => {
+        if (!(await confirmDialog("سيتم إنشاء قيد عكسي وإلغاء الفاتورة. متابعة؟"))) return;
+        try {
+          await api(`/invoices/${invoiceId}/void`, { method: "POST", body: { reason: "إلغاء من التطبيق" } });
+          toast("تم إلغاء الفاتورة", "success");
+          renderInvoiceDetail(invoiceId);
+        } catch (error) {
+          toast(error.message, "error");
+        }
+      };
+    }
+
+    setScreen(view, { appbar: appbar({ title: invoice.number, back: "#/invoices" }) });
+  } catch (error) {
+    setScreen(emptyState("⚠️", "تعذّر تحميل الفاتورة", error.message), { tabbar: tabbar() });
+  }
 }
 
-/* ---------------- payments ---------------- */
-async function renderPayments(view) {
-  const payments = await api("/payments");
-  view.innerHTML = `
-    <div class="row" style="margin-bottom:12px">
-      <button class="btn sm" style="flex:1" id="new-rcv">+ تحصيل من عميل</button>
-      <button class="btn sm ghost" style="flex:1" id="new-pay">+ دفع لمورد</button>
-    </div>
-    <div class="list" id="pay-list"></div>`;
-  $("#new-rcv").onclick = () => paymentForm("receive");
-  $("#new-pay").onclick = () => paymentForm("spend");
+// ---------------------------------------------------------------- payments
 
-  const list = $("#pay-list");
-  if (!payments.length) { list.innerHTML = `<div class="empty">لا توجد مدفوعات</div>`; return; }
-  payments.forEach((p) => {
-    const item = el(`
-      <div class="item">
-        <div class="main">
-          <div class="title">${esc(p.contact_name)}</div>
-          <div class="sub">${p.kind === "receive" ? "تحصيل" : "دفع"} · ${esc(p.number)} · ${esc(p.date)}</div>
-        </div>
-        <div class="amount ${p.kind === "receive" ? "pos" : "neg"}">${fmt(p.amount)}</div>
-      </div>`);
-    item.onclick = async () => {
-      if (!confirm("حذف هذه الدفعة؟")) return;
-      try { await api("/payments/" + p.id, { method: "DELETE" }); toast("تم الحذف"); render(); }
-      catch (e) { toast(e.message, true); }
-    };
-    list.append(item);
-  });
-}
+function buildPaymentForm({ kind, contactId, amount, cashAccounts, invoiceId, onDone, onClose }) {
+  const form = el(`<form novalidate>
+    <div class="field"><label class="field__label" for="amount">المبلغ</label>
+      <input class="input num" id="amount" type="number" step="0.01" min="0.01" inputmode="decimal"
+        value="${amount ? Number(amount).toFixed(2) : ""}" required /></div>
+    <div class="field"><label class="field__label" for="date">التاريخ</label>
+      <input class="input" id="date" type="date" value="${today()}" required /></div>
+    <div class="field"><label class="field__label" for="account">الحساب</label>
+      <select class="select" id="account" required>
+        ${cashAccounts.map((a) => `<option value="${a.id}">${escapeHtml(a.name_ar || a.name)}</option>`).join("")}
+      </select></div>
+    <div class="field"><label class="field__label" for="reference">المرجع</label>
+      <input class="input" id="reference" placeholder="رقم التحويل أو الشيك (اختياري)" /></div>
+    <button class="btn btn--block" type="submit">حفظ الدفعة</button>
+  </form>`);
 
-function paymentForm(kind) {
-  const parties = state.contacts.filter((c) => kind === "receive" ? c.kind !== "supplier" : c.kind !== "customer");
-  const banks = state.accounts.filter((a) => ["1200", "1210"].includes(a.code));
-  const form = el(`
-    <form>
-      <label>الطرف</label>
-      <select id="p-contact" required><option value="">— اختر —</option>
-        ${parties.map((c) => `<option value="${c.id}">${esc(c.name)} (رصيد ${fmt(c.balance)})</option>`).join("")}
-      </select>
-      <label>التاريخ</label>
-      <input type="date" id="p-date" value="${today()}" required />
-      <label>المبلغ</label>
-      <input type="number" step="0.01" id="p-amount" required />
-      <label>حساب النقدية / البنك</label>
-      <select id="p-bank">
-        ${banks.map((a) => `<option value="${a.id}">${esc(a.code + " " + a.name)}</option>`).join("")}
-      </select>
-      <label>المرجع</label>
-      <input id="p-ref" />
-      <button class="btn" type="submit">حفظ الدفعة</button>
-    </form>`);
-  const closeSheet = sheet(kind === "receive" ? "تحصيل من عميل" : "دفع لمورد", form);
-  form.onsubmit = async (e) => {
-    e.preventDefault();
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    const button = form.querySelector("button[type=submit]");
     const payload = {
       kind,
-      contact_id: Number($("#p-contact", form).value),
-      date: $("#p-date", form).value,
-      amount: num($("#p-amount", form).value),
-      bank_account_id: Number($("#p-bank", form).value),
-      reference: $("#p-ref", form).value,
+      contact_id: contactId,
+      date: form.querySelector("#date").value,
+      amount: Number(form.querySelector("#amount").value),
+      bank_account_id: Number(form.querySelector("#account").value),
+      reference: form.querySelector("#reference").value.trim(),
+      ...(invoiceId ? { invoice_id: Number(invoiceId) } : {}),
     };
-    if (!payload.contact_id) return toast("اختر الطرف", true);
-    if (payload.amount <= 0) return toast("أدخل مبلغاً صحيحاً", true);
-    try {
-      await api("/payments", { method: "POST", body: JSON.stringify(payload) });
-      closeSheet();
-      toast("تم تسجيل الدفعة");
-      render();
-    } catch (err) { toast(err.message, true); }
-  };
-}
+    if (!(payload.amount > 0)) return toast("أدخل مبلغاً صحيحاً", "error");
 
-/* ---------------- contacts ---------------- */
-async function renderContacts(view) {
-  view.innerHTML = `
-    <button class="btn" style="margin-bottom:12px" id="new-contact">+ إضافة عميل / مورد</button>
-    <div class="list" id="c-list"></div>`;
-  $("#new-contact").onclick = contactForm;
-  const list = $("#c-list");
-  const contacts = state.contacts;
-  if (!contacts.length) { list.innerHTML = `<div class="empty">لا توجد جهات اتصال</div>`; return; }
-  contacts.forEach((c) => {
-    const kindLabel = { customer: "عميل", supplier: "مورد", both: "عميل ومورد" }[c.kind] || c.kind;
-    const item = el(`
-      <div class="item">
-        <div class="main">
-          <div class="title">${esc(c.name)}</div>
-          <div class="sub">${kindLabel}${c.phone ? " · " + esc(c.phone) : ""}</div>
-        </div>
-        <div class="amount ${num(c.balance) >= 0 ? "pos" : "neg"}">${fmt(c.balance)}</div>
-      </div>`);
-    item.onclick = () => showStatement(c.id);
-    list.append(item);
-  });
-}
-
-function contactForm() {
-  const form = el(`
-    <form>
-      <label>الاسم</label><input id="c-name" required />
-      <label>النوع</label>
-      <select id="c-kind"><option value="customer">عميل</option><option value="supplier">مورد</option><option value="both">عميل ومورد</option></select>
-      <label>الهاتف</label><input id="c-phone" />
-      <label>البريد</label><input id="c-email" type="email" />
-      <label>الرقم الضريبي</label><input id="c-tax" />
-      <label>العنوان</label><textarea id="c-addr"></textarea>
-      <button class="btn" type="submit">حفظ</button>
-    </form>`);
-  const closeSheet = sheet("جهة اتصال جديدة", form);
-  form.onsubmit = async (e) => {
-    e.preventDefault();
+    button.disabled = true;
+    button.textContent = "جارٍ الحفظ...";
     try {
-      await api("/contacts", {
+      await api("/payments", {
         method: "POST",
-        body: JSON.stringify({
-          name: $("#c-name", form).value,
-          kind: $("#c-kind", form).value,
-          phone: $("#c-phone", form).value,
-          email: $("#c-email", form).value,
-          tax_number: $("#c-tax", form).value,
-          address: $("#c-addr", form).value,
-        }),
+        body: payload,
+        headers: { "Idempotency-Key": idempotencyKey("pay", payload) },
       });
-      closeSheet();
-      await refreshLookups();
-      toast("تم الحفظ");
-      render();
-    } catch (err) { toast(err.message, true); }
-  };
-}
-
-async function showStatement(id) {
-  const data = await api(`/contacts/${id}/statement`);
-  const body = el(`
-    <div>
-      <div class="total-row"><span>الرصيد الحالي</span><b>${fmt(data.balance)}</b></div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>التاريخ</th><th>البيان</th><th class="num">مدين</th><th class="num">دائن</th><th class="num">رصيد</th></tr></thead>
-          <tbody>
-            ${data.rows.length ? data.rows.map((r) => `<tr><td>${esc(r.date)}</td><td>${esc(r.description)}</td><td class="num">${fmt(r.debit)}</td><td class="num">${fmt(r.credit)}</td><td class="num">${fmt(r.balance)}</td></tr>`).join("")
-              : `<tr><td colspan="5" class="empty">لا توجد حركات</td></tr>`}
-          </tbody>
-        </table>
-      </div>
-    </div>`);
-  sheet("كشف حساب: " + data.contact.name, body);
-}
-
-/* ---------------- reports ---------------- */
-async function renderReports(view) {
-  view.innerHTML = `
-    <div class="list">
-      <div class="item" data-r="income"><div class="main"><div class="title">قائمة الدخل</div><div class="sub">الإيرادات والمصروفات وصافي الربح</div></div><div class="amount">›</div></div>
-      <div class="item" data-r="balance"><div class="main"><div class="title">الميزانية العمومية</div><div class="sub">الأصول والالتزامات وحقوق الملكية</div></div><div class="amount">›</div></div>
-      <div class="item" data-r="trial"><div class="main"><div class="title">ميزان المراجعة</div><div class="sub">أرصدة كل الحسابات</div></div><div class="amount">›</div></div>
-      <div class="item" data-r="aging"><div class="main"><div class="title">أعمار الديون</div><div class="sub">أرصدة العملاء حسب التأخر</div></div><div class="amount">›</div></div>
-      <div class="item" data-r="journal"><div class="main"><div class="title">دفتر اليومية</div><div class="sub">كل القيود المحاسبية</div></div><div class="amount">›</div></div>
-    </div>`;
-  view.querySelectorAll("[data-r]").forEach((n) => (n.onclick = () => showReport(n.dataset.r)));
-}
-
-async function showReport(kind) {
-  const body = el(`<div class="empty">جاري التحميل…</div>`);
-  sheet("تقرير", body);
-  const box = body.parentElement ? body : null;
-  try {
-    if (kind === "income") {
-      const d = await api("/reports/income-statement");
-      body.innerHTML = `
-        <div class="total-row"><span>الإيرادات</span><b>${fmt(d.income)}</b></div>
-        <div class="total-row"><span>المصروفات</span><b>${fmt(d.expense)}</b></div>
-        <div class="total-row grand"><span>صافي الربح</span><b class="${num(d.net_profit) < 0 ? "neg" : "pos"}">${fmt(d.net_profit)}</b></div>`;
-    } else if (kind === "balance") {
-      const d = await api("/reports/balance-sheet");
-      body.innerHTML = `
-        <div class="total-row"><span>الأصول</span><b>${fmt(d.assets)}</b></div>
-        <div class="total-row"><span>الالتزامات</span><b>${fmt(d.liabilities)}</b></div>
-        <div class="total-row"><span>حقوق الملكية</span><b>${fmt(d.total_equity)}</b></div>
-        <div class="total-row grand"><span>الالتزامات + الملكية</span><b>${fmt(d.total_liabilities_equity)}</b></div>
-        <div class="total-row"><span>متوازنة؟</span><b>${d.balanced ? "✓ نعم" : "✗ لا"}</b></div>`;
-    } else if (kind === "trial") {
-      const d = await api("/reports/trial-balance");
-      body.innerHTML = `<div class="table-wrap"><table>
-        <thead><tr><th>الحساب</th><th class="num">مدين</th><th class="num">دائن</th></tr></thead>
-        <tbody>${d.rows.map((r) => `<tr><td>${esc(r.code + " " + r.name)}</td><td class="num">${fmt(r.debit)}</td><td class="num">${fmt(r.credit)}</td></tr>`).join("")}</tbody>
-        <tfoot><tr><td>الإجمالي</td><td class="num">${fmt(d.total_debit)}</td><td class="num">${fmt(d.total_credit)}</td></tr></tfoot>
-      </table></div>`;
-    } else if (kind === "aging") {
-      const d = await api("/reports/ar-aging");
-      body.innerHTML = `
-        <div class="total-row"><span>جاري</span><b>${fmt(d.buckets.current)}</b></div>
-        <div class="total-row"><span>1-30 يوم</span><b>${fmt(d.buckets["1_30"])}</b></div>
-        <div class="total-row"><span>31-60 يوم</span><b>${fmt(d.buckets["31_60"])}</b></div>
-        <div class="total-row"><span>+60 يوم</span><b>${fmt(d.buckets["60_plus"])}</b></div>
-        <div class="table-wrap" style="margin-top:10px"><table>
-          <thead><tr><th>العميل</th><th class="num">الإجمالي</th></tr></thead>
-          <tbody>${d.contacts.length ? d.contacts.map((c) => `<tr><td>${esc(c.name)}</td><td class="num">${fmt(c.total)}</td></tr>`).join("") : `<tr><td colspan="2" class="empty">لا مديونيات</td></tr>`}</tbody>
-        </table></div>`;
-    } else {
-      const entries = await api("/reports/journal?limit=60");
-      body.innerHTML = entries.length ? entries.map((e) => `
-        <div class="card" style="margin-bottom:10px">
-          <div class="sub">${esc(e.date)} · ${esc(e.reference || e.source_type)}</div>
-          <div class="table-wrap"><table>
-            <tbody>${e.lines.map((l) => `<tr><td>${esc(l.account)}</td><td class="num">${num(l.debit) ? fmt(l.debit) : ""}</td><td class="num">${num(l.credit) ? fmt(l.credit) : ""}</td></tr>`).join("")}</tbody>
-          </table></div>
-        </div>`).join("") : `<div class="empty">لا توجد قيود</div>`;
+      toast("تم تسجيل الدفعة", "success");
+      onClose?.();
+      await onDone();
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+      button.textContent = "حفظ الدفعة";
     }
-  } catch (e) {
-    body.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+  };
+  return form;
+}
+
+async function renderPayments({ autoNew } = {}) {
+  setScreen(spinner(), { appbar: appbar({ title: "المدفوعات" }), tabbar: tabbar() });
+  try {
+    const [payments, accounts] = await Promise.all([api("/payments"), loadAccounts()]);
+    await loadContacts();
+    const cashAccounts = accounts.filter((a) => ["1010", "1020"].includes(a.code));
+
+    const rows = payments
+      .map(
+        (payment) => `<li><div class="list__item">
+        <div class="list__main">
+          <div class="list__title">${escapeHtml(contactName(payment.contact_id))}</div>
+          <div class="list__meta">${escapeHtml(payment.number)} · ${date(payment.date)}
+            · ${payment.kind === "receive" ? "تحصيل" : "صرف"}</div>
+        </div>
+        <div class="list__value num" style="color:${payment.kind === "receive" ? "var(--ok-fg)" : "var(--danger-fg)"}">
+          ${money(payment.amount)}</div></div></li>`
+      )
+      .join("");
+
+    setScreen(
+      el(`<div>
+        <div class="card card--flush">
+          ${payments.length ? `<ul class="list">${rows}</ul>` : emptyState("💵", "لا توجد مدفوعات", "سجّل تحصيلاً من عميل أو دفعة لمورد")}
+        </div>
+        <div class="action-bar">
+          <button class="btn" data-new="receive">＋ تحصيل من عميل</button>
+          <button class="btn btn--ghost" data-new="spend">＋ صرف لمورد</button>
+        </div>
+      </div>`),
+      { appbar: appbar({ title: "المدفوعات" }), tabbar: tabbar() }
+    );
+
+    document.querySelectorAll("[data-new]").forEach((button) => {
+      button.onclick = () => startNewPayment(button.dataset.new, cashAccounts);
+    });
+
+    if (autoNew === "receive" || autoNew === "spend") startNewPayment(autoNew, cashAccounts);
+  } catch (error) {
+    setScreen(emptyState("⚠️", "خطأ", error.message), { tabbar: tabbar() });
   }
 }
 
-/* ---------------- more ---------------- */
-async function renderMore(view) {
-  const s = state.settings;
-  view.innerHTML = `
-    <div class="card">
-      <h3>بيانات الشركة</h3>
-      <label>اسم الشركة</label><input id="s-name" value="${esc(s.company_name || "")}" />
-      <label>العملة</label><input id="s-currency" value="${esc(s.currency || "")}" />
-      <label>نسبة ضريبة القيمة المضافة %</label><input type="number" id="s-vat" value="${esc(s.vat_rate || "0")}" />
-      <button class="btn" id="save-settings">حفظ الإعدادات</button>
-    </div>
-    <div class="card">
-      <h3>دليل الحسابات</h3>
-      <button class="btn ghost" id="open-accounts">عرض الحسابات</button>
-      <button class="btn ghost" id="new-account">+ حساب جديد</button>
-      <button class="btn ghost" id="new-journal">+ قيد يدوي</button>
-    </div>
-    <div class="card">
-      <h3>الحساب</h3>
-      <div class="total-row"><span>المستخدم</span><b>${esc(state.user?.full_name || "")}</b></div>
-      <button class="btn danger" id="logout2">تسجيل الخروج</button>
-    </div>`;
-  $("#save-settings").onclick = async () => {
-    try {
-      state.settings = await api("/settings", {
-        method: "PUT",
-        body: JSON.stringify({ company_name: $("#s-name").value, currency: $("#s-currency").value, vat_rate: $("#s-vat").value }),
-      });
-      toast("تم الحفظ");
-    } catch (e) { toast(e.message, true); }
-  };
-  $("#open-accounts").onclick = showAccounts;
-  $("#new-account").onclick = accountForm;
-  $("#new-journal").onclick = journalForm;
-  $("#logout2").onclick = logout;
-}
+/** Two-step flow: pick the contact and amount, then confirm the payment details. */
+function startNewPayment(kind, cashAccounts) {
+  const wanted = kind === "receive" ? "customer" : "supplier";
+  const options = (store.cache.contacts || []).filter((c) => c.kind === wanted);
+  if (!options.length) {
+    toast(`أضف ${kind === "receive" ? "عميلاً" : "مورداً"} أولاً`, "error");
+    return;
+  }
 
-async function showAccounts() {
-  const accounts = await api("/accounts");
-  const body = el(`<div class="table-wrap"><table>
-    <thead><tr><th>الكود</th><th>الحساب</th><th class="num">الرصيد</th></tr></thead>
-    <tbody>${accounts.map((a) => `<tr><td>${esc(a.code)}</td><td>${esc(a.name_ar || a.name)}</td><td class="num">${fmt(a.balance)}</td></tr>`).join("")}</tbody>
-  </table></div>`);
-  sheet("دليل الحسابات", body);
-}
+  const picker = el(`<form novalidate>
+    <div class="field"><label class="field__label">${kind === "receive" ? "العميل" : "المورد"}</label>
+      <select class="select" id="contact" required>
+        ${options.map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("")}
+      </select></div>
+    <div class="field"><label class="field__label">المبلغ</label>
+      <input class="input num" id="amount" type="number" step="0.01" min="0.01" inputmode="decimal" required /></div>
+    <button class="btn btn--block" type="submit">متابعة</button>
+  </form>`);
 
-function accountForm() {
-  const types = [["asset", "أصول"], ["liability", "التزامات"], ["equity", "حقوق ملكية"], ["income", "إيرادات"], ["expense", "مصروفات"]];
-  const groups = state.accounts.filter((a) => a.is_group);
-  const form = el(`
-    <form>
-      <label>الكود</label><input id="a-code" required />
-      <label>الاسم (عربي)</label><input id="a-name-ar" required />
-      <label>الاسم (إنجليزي)</label><input id="a-name" />
-      <label>النوع</label><select id="a-type">${types.map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select>
-      <label>الحساب الأب (اختياري)</label>
-      <select id="a-parent"><option value="">— بدون —</option>${groups.map((a) => `<option value="${a.id}">${esc(a.code + " " + (a.name_ar || a.name))}</option>`).join("")}</select>
-      <button class="btn" type="submit">حفظ الحساب</button>
-    </form>`);
-  const closeSheet = sheet("حساب جديد", form);
-  form.onsubmit = async (e) => {
-    e.preventDefault();
-    try {
-      await api("/accounts", {
-        method: "POST",
-        body: JSON.stringify({
-          code: $("#a-code", form).value,
-          name: $("#a-name", form).value || $("#a-name-ar", form).value,
-          name_ar: $("#a-name-ar", form).value,
-          type: $("#a-type", form).value,
-          parent_id: $("#a-parent", form).value ? Number($("#a-parent", form).value) : null,
-          is_group: false,
-        }),
-      });
-      closeSheet();
-      await refreshLookups();
-      toast("تم الحفظ");
-    } catch (err) { toast(err.message, true); }
+  const closePicker = openSheet(kind === "receive" ? "تحصيل من عميل" : "صرف لمورد", picker);
+  picker.onsubmit = (event) => {
+    event.preventDefault();
+    const amount = Number(picker.querySelector("#amount").value);
+    if (!(amount > 0)) return toast("أدخل مبلغاً صحيحاً", "error");
+    const contactId = Number(picker.querySelector("#contact").value);
+    closePicker();
+    let closePayment = () => {};
+    closePayment = openSheet(
+      "تفاصيل الدفعة",
+      buildPaymentForm({
+        kind,
+        contactId,
+        amount,
+        cashAccounts,
+        onDone: () => renderPayments(),
+        onClose: () => closePayment(),
+      })
+    );
   };
 }
 
-function journalForm() {
-  const accounts = state.accounts.filter((a) => !a.is_group);
-  const contacts = state.contacts;
-  const form = el(`
-    <form>
-      <label>التاريخ</label><input type="date" id="j-date" value="${today()}" required />
-      <label>البيان</label><input id="j-memo" />
-      <label>البنود (مدين = دائن)</label>
-      <div id="j-lines"></div>
-      <button type="button" class="btn ghost sm" id="j-add" style="width:100%">+ بند</button>
-      <div class="total-row"><span>إجمالي المدين</span><b id="j-dr">0.00</b></div>
-      <div class="total-row"><span>إجمالي الدائن</span><b id="j-cr">0.00</b></div>
-      <button class="btn" type="submit">ترحيل القيد</button>
-    </form>`);
-  const box = $("#j-lines", form);
-  function addLine() {
-    const wrap = el(`<div class="j-line" style="border-bottom:1px dashed var(--line); padding-bottom:8px; margin-bottom:8px">
-      <select class="j-acc">${accounts.map((a) => `<option value="${a.id}">${esc(a.code + " " + (a.name_ar || a.name))}</option>`).join("")}</select>
-      <select class="j-contact" style="margin-top:6px"><option value="">— بدون جهة —</option>${contacts.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select>
-      <div class="row" style="margin-top:6px">
-        <input type="number" step="0.01" class="j-dr" placeholder="مدين" value="0" />
-        <input type="number" step="0.01" class="j-cr" placeholder="دائن" value="0" />
-        <button type="button" class="del" style="flex:0 0 40px; background:var(--danger); color:#fff; border:0; border-radius:8px; cursor:pointer">✕</button>
+// ---------------------------------------------------------------- contacts
+
+async function renderContacts() {
+  setScreen(spinner(), { appbar: appbar({ title: "العملاء والموردون" }), tabbar: tabbar() });
+  try {
+    const contacts = await loadContacts(true);
+    const rows = contacts
+      .map(
+        (contact) => `<li><a class="list__item" href="#/contacts/${contact.id}">
+        <div class="list__main">
+          <div class="list__title">${escapeHtml(contact.name)}</div>
+          <div class="list__meta">${contact.kind === "customer" ? "عميل" : "مورد"}
+            ${contact.phone ? `· <span class="num">${escapeHtml(contact.phone)}</span>` : ""}</div>
+        </div><span style="color:var(--ink-400)">‹</span></a></li>`
+      )
+      .join("");
+
+    setScreen(
+      el(`<div>
+        <div class="card card--flush">
+          ${contacts.length ? `<ul class="list">${rows}</ul>` : emptyState("👥", "لا يوجد عملاء", "أضف عميلاً أو مورداً للبدء")}
+        </div>
+        <div class="action-bar"><button class="btn" data-add>＋ جهة جديدة</button></div>
+      </div>`),
+      { appbar: appbar({ title: "العملاء والموردون" }), tabbar: tabbar() }
+    );
+
+    document.querySelector("[data-add]").onclick = () => {
+      const form = el(`<form novalidate>
+        <div class="segment">
+          <button type="button" class="segment__btn" data-kind="customer" aria-pressed="true">عميل</button>
+          <button type="button" class="segment__btn" data-kind="supplier" aria-pressed="false">مورد</button>
+        </div>
+        <div class="field"><label class="field__label">الاسم</label>
+          <input class="input" id="name" required placeholder="اسم الجهة" /></div>
+        <div class="field"><label class="field__label">الهاتف</label>
+          <input class="input num" id="phone" inputmode="tel" placeholder="01xxxxxxxxx" /></div>
+        <div class="field"><label class="field__label">الرقم الضريبي</label>
+          <input class="input num" id="tax_number" placeholder="اختياري" /></div>
+        <div class="field"><label class="field__label">مدة السداد (يوم)</label>
+          <input class="input num" id="terms" type="number" value="30" min="0" inputmode="numeric" /></div>
+        <button class="btn btn--block" type="submit">حفظ</button>
+      </form>`);
+
+      let kind = "customer";
+      form.querySelectorAll("[data-kind]").forEach((button) => {
+        button.onclick = () => {
+          kind = button.dataset.kind;
+          form.querySelectorAll("[data-kind]").forEach((b) => b.setAttribute("aria-pressed", String(b === button)));
+        };
+      });
+
+      const close = openSheet("جهة جديدة", form);
+      form.onsubmit = async (event) => {
+        event.preventDefault();
+        const submit = form.querySelector("button[type=submit]");
+        submit.disabled = true;
+        try {
+          await api("/contacts", {
+            method: "POST",
+            body: {
+              name: form.querySelector("#name").value.trim(),
+              kind,
+              phone: form.querySelector("#phone").value.trim(),
+              tax_number: form.querySelector("#tax_number").value.trim(),
+              payment_terms_days: Number(form.querySelector("#terms").value) || 30,
+            },
+          });
+          toast("تمت الإضافة", "success");
+          close();
+          renderContacts();
+        } catch (error) {
+          toast(error.message, "error");
+          submit.disabled = false;
+        }
+      };
+    };
+  } catch (error) {
+    setScreen(emptyState("⚠️", "خطأ", error.message), { tabbar: tabbar() });
+  }
+}
+
+async function renderContactDetail(contactId) {
+  setScreen(spinner(), { appbar: appbar({ title: "كشف حساب", back: "#/contacts" }) });
+  try {
+    const data = await api(`/contacts/${contactId}/statement`);
+    const view = el(`<div>
+      <div class="card">
+        <h2 class="card__title">${escapeHtml(data.contact.name)}</h2>
+        <div class="list__meta">${data.contact.kind === "customer" ? "عميل" : "مورد"}
+          ${data.contact.phone ? `· <span class="num">${escapeHtml(data.contact.phone)}</span>` : ""}</div>
+        <div class="totals" style="border-top:0;margin-top:12px">
+          <div class="totals__row totals__row--grand"><span>الرصيد المستحق</span>
+            <span class="num">${money(data.balance)}</span></div>
+        </div>
+      </div>
+
+      <div class="section-title">الحركات</div>
+      <div class="card card--flush table-wrap">
+        ${data.movements.length
+          ? `<table><thead><tr><th>التاريخ</th><th>البيان</th><th class="num">مدين</th><th class="num">دائن</th><th class="num">الرصيد</th></tr></thead>
+            <tbody>${data.movements
+              .map(
+                (row) => `<tr><td class="num">${date(row.date)}</td>
+                <td>${escapeHtml(row.description || row.reference || "—")}</td>
+                <td class="num">${Number(row.debit) ? money(row.debit) : "—"}</td>
+                <td class="num">${Number(row.credit) ? money(row.credit) : "—"}</td>
+                <td class="num">${money(row.balance)}</td></tr>`
+              )
+              .join("")}</tbody></table>`
+          : emptyState("📄", "لا توجد حركات", "لم تُسجّل أي فواتير أو مدفوعات لهذه الجهة")}
+      </div>
+
+      <div class="section-title">الفواتير (${data.invoices.length})</div>
+      <div class="card card--flush">
+        ${data.invoices.length
+          ? `<ul class="list">${data.invoices
+              .map(
+                (invoice) => `<li><a class="list__item" href="#/invoices/${invoice.id}">
+                <div class="list__main"><div class="list__title num">${escapeHtml(invoice.number)}</div></div>
+                <div style="text-align:end"><div class="list__value num">${money(invoice.total)}</div>
+                  <div style="margin-top:4px">${statusBadge(invoice.status)}</div></div></a></li>`
+              )
+              .join("")}</ul>`
+          : '<div class="list__meta" style="padding:16px">لا توجد فواتير</div>'}
       </div>
     </div>`);
-    wrap.querySelector(".del").onclick = () => { wrap.remove(); recalc(); };
-    wrap.querySelectorAll("input").forEach((i) => i.addEventListener("input", recalc));
-    box.append(wrap);
-    recalc();
+    setScreen(view, { appbar: appbar({ title: data.contact.name, back: "#/contacts" }) });
+  } catch (error) {
+    setScreen(emptyState("⚠️", "تعذّر تحميل الكشف", error.message), { tabbar: tabbar() });
   }
+}
+
+// ---------------------------------------------------------------- reports
+
+const REPORTS = [
+  { key: "income-statement", label: "قائمة الدخل", icon: "📈" },
+  { key: "balance-sheet", label: "الميزانية العمومية", icon: "⚖️" },
+  { key: "trial-balance", label: "ميزان المراجعة", icon: "📋" },
+  { key: "ar-aging", label: "أعمار الديون", icon: "⏳" },
+];
+
+async function renderReports() {
+  setScreen(
+    el(`<div>
+      <div class="card card--flush">
+        <ul class="list">
+          ${REPORTS.map(
+            (report) => `<li><a class="list__item" href="#/reports/${report.key}">
+              <span style="font-size:1.4rem">${report.icon}</span>
+              <div class="list__main"><div class="list__title">${report.label}</div></div>
+              <span style="color:var(--ink-400)">‹</span></a></li>`
+          ).join("")}
+        </ul>
+      </div>
+      <div class="section-title">الدفتر اليومي</div>
+      <div class="card card--flush">
+        <ul class="list"><li><a class="list__item" href="#/journal">
+          <span style="font-size:1.4rem">📒</span>
+          <div class="list__main"><div class="list__title">القيود المحاسبية</div>
+            <div class="list__meta">عرض وإضافة قيود يدوية</div></div>
+          <span style="color:var(--ink-400)">‹</span></a></li></ul>
+      </div>
+    </div>`),
+    { appbar: appbar({ title: "التقارير" }), tabbar: tabbar() }
+  );
+}
+
+async function renderReport(key) {
+  setScreen(spinner(), { appbar: appbar({ title: REPORTS.find((r) => r.key === key)?.label || "تقرير", back: "#/reports" }) });
+  try {
+    const data = await api(`/reports/${key}`);
+    let view;
+
+    if (key === "income-statement") {
+      view = el(`<div>
+        <div class="kpi-grid">
+          <div class="kpi kpi--income"><div class="kpi__label">الإيرادات</div><div class="kpi__value num">${money(data.income)}</div></div>
+          <div class="kpi kpi--expense"><div class="kpi__label">المصروفات</div><div class="kpi__value num">${money(data.expense)}</div></div>
+        </div>
+        <div class="card" style="margin-top:12px">
+          <div class="totals__row totals__row--grand"><span>صافي الربح</span><span class="num">${money(data.net_profit)}</span></div>
+        </div></div>`);
+    } else if (key === "balance-sheet") {
+      view = el(`<div>
+        <div class="card">
+          <div class="totals__row"><span>الأصول</span><span class="num">${money(data.assets)}</span></div>
+          <div class="totals__row"><span>الالتزامات</span><span class="num">${money(data.liabilities)}</span></div>
+          <div class="totals__row"><span>رأس المال</span><span class="num">${money(data.equity)}</span></div>
+          <div class="totals__row"><span>الأرباح المحتجزة</span><span class="num">${money(data.net_profit)}</span></div>
+          <div class="totals__row totals__row--grand"><span>إجمالي الالتزامات + حقوق الملكية</span>
+            <span class="num">${money(data.total_liabilities_equity)}</span></div>
+        </div>
+        <div class="card" style="text-align:center;border-inline-start:4px solid var(--${data.balanced ? "ok" : "danger"}-fg)">
+          <strong>${data.balanced ? "✓ الميزانية متوازنة" : "⚠️ الميزانية غير متوازنة"}</strong></div></div>`);
+    } else if (key === "trial-balance") {
+      view = el(`<div class="card card--flush table-wrap">
+        <table><thead><tr><th>الحساب</th><th class="num">مدين</th><th class="num">دائن</th><th class="num">الرصيد</th></tr></thead>
+        <tbody>${data.rows
+          .map(
+            (row) => `<tr><td>${escapeHtml(row.name_ar || row.name)}
+            <div class="list__meta num">${escapeHtml(row.code)}</div></td>
+            <td class="num">${Number(row.debit) ? money(row.debit) : "—"}</td>
+            <td class="num">${Number(row.credit) ? money(row.credit) : "—"}</td>
+            <td class="num">${money(row.balance)}</td></tr>`
+          )
+          .join("")}
+        <tr class="total-row"><td>الإجمالي</td><td class="num">${money(data.total_debit)}</td>
+          <td class="num">${money(data.total_credit)}</td><td></td></tr></tbody></table></div>`);
+    } else {
+      view = el(`<div>
+        <div class="kpi-grid">
+          <div class="kpi"><div class="kpi__label">جاري</div><div class="kpi__value num">${money(data.buckets.current)}</div></div>
+          <div class="kpi"><div class="kpi__label">1–30 يوم</div><div class="kpi__value num">${money(data.buckets["1_30"])}</div></div>
+          <div class="kpi"><div class="kpi__label">31–60 يوم</div><div class="kpi__value num">${money(data.buckets["31_60"])}</div></div>
+          <div class="kpi"><div class="kpi__label">أكثر من 60</div><div class="kpi__value num">${money(data.buckets["60_plus"])}</div></div>
+        </div>
+        <div class="section-title">تفصيل حسب الجهة</div>
+        <div class="card card--flush table-wrap">
+          ${data.contacts.length
+            ? `<table><thead><tr><th>الجهة</th><th class="num">جاري</th><th class="num">1–30</th>
+              <th class="num">31–60</th><th class="num">+60</th><th class="num">الإجمالي</th></tr></thead>
+              <tbody>${data.contacts
+                .map(
+                  (row) => `<tr><td>${escapeHtml(row.name)}</td>
+                  <td class="num">${money(row.current)}</td><td class="num">${money(row["1_30"])}</td>
+                  <td class="num">${money(row["31_60"])}</td><td class="num">${money(row["60_plus"])}</td>
+                  <td class="num"><strong>${money(row.total)}</strong></td></tr>`
+                )
+                .join("")}</tbody></table>`
+            : emptyState("✓", "لا توجد ديون مستحقة", "كل الفواتير محصّلة")}
+        </div></div>`);
+    }
+
+    setScreen(view, { appbar: appbar({ title: REPORTS.find((r) => r.key === key)?.label, back: "#/reports" }) });
+  } catch (error) {
+    setScreen(emptyState("⚠️", "تعذّر تحميل التقرير", error.message), { tabbar: tabbar() });
+  }
+}
+
+// ---------------------------------------------------------------- journal
+
+async function renderJournal() {
+  setScreen(spinner(), { appbar: appbar({ title: "القيود المحاسبية", back: "#/reports" }) });
+  try {
+    const entries = await api("/journal");
+    const view = el(`<div>
+      <div class="card card--flush">
+        ${entries.length
+          ? `<ul class="list">${entries
+              .map(
+                (entry) => `<li><div class="list__item">
+                <div class="list__main">
+                  <div class="list__title">${escapeHtml(entry.memo || entry.reference || "قيد")}</div>
+                  <div class="list__meta"><span class="num">${date(entry.entry_date)}</span>
+                    · ${entry.source_type === "manual" ? "يدوي" : escapeHtml(entry.source_type)}
+                    ${entry.reverses_entry_id ? " · قيد عكسي" : ""}</div>
+                </div>
+                <div class="list__value num">${money(
+                  entry.lines.reduce((sum, line) => sum + Number(line.debit), 0)
+                )}</div></div></li>`
+              )
+              .join("")}</ul>`
+          : emptyState("📒", "لا توجد قيود", "أنشئ قيداً يدوياً")}
+      </div>
+      <div class="action-bar"><a class="btn" href="#/journal/new">＋ قيد يدوي</a></div>
+    </div>`);
+    setScreen(view, { appbar: appbar({ title: "القيود المحاسبية", back: "#/reports" }) });
+  } catch (error) {
+    setScreen(emptyState("⚠️", "خطأ", error.message), { tabbar: tabbar() });
+  }
+}
+
+async function renderJournalForm() {
+  const accounts = await loadAccounts();
+  const view = el(`<form novalidate>
+    <div class="card">
+      <div class="field"><label class="field__label">التاريخ</label>
+        <input class="input" type="date" id="entry_date" value="${today()}" required /></div>
+      <div class="field"><label class="field__label">البيان</label>
+        <input class="input" id="memo" placeholder="وصف القيد" /></div>
+      <div class="field"><label class="field__label">المرجع</label>
+        <input class="input num" id="reference" placeholder="اختياري" /></div>
+    </div>
+    <div class="section-title">البنود (مدين = دائن)</div>
+    <div id="lines"></div>
+    <button type="button" class="btn btn--ghost btn--block" data-add>＋ إضافة سطر</button>
+    <div class="card" style="margin-top:12px">
+      <div class="totals__row"><span>إجمالي المدين</span><span class="num" data-debits>0.00</span></div>
+      <div class="totals__row"><span>إجمالي الدائن</span><span class="num" data-credits>0.00</span></div>
+      <div class="totals__row totals__row--grand"><span>الفرق</span><span class="num" data-diff>0.00</span></div>
+    </div>
+    <div class="action-bar"><button class="btn" type="submit">ترحيل القيد</button>
+      <button class="btn btn--ghost" type="button" data-nav="#/journal">إلغاء</button></div>
+  </form>`);
+
+  const linesHost = view.querySelector("#lines");
+  const accountOptions = accounts
+    .filter((a) => !a.is_group)
+    .map((a) => `<option value="${a.id}">${escapeHtml(a.code)} — ${escapeHtml(a.name_ar || a.name)}</option>`)
+    .join("");
+
+  function addLine() {
+    const node = el(`<div class="line-editor">
+      <div class="line-editor__head"><span>سطر</span>
+        <button type="button" class="btn btn--ghost btn--sm" data-remove>حذف</button></div>
+      <div class="field"><label class="field__label">الحساب</label>
+        <select class="select" data-account>${accountOptions}</select></div>
+      <div class="line-editor__row">
+        <div class="field"><label class="field__label">مدين</label>
+          <input class="input num" data-debit type="number" step="0.01" min="0" value="0" inputmode="decimal" /></div>
+        <div class="field"><label class="field__label">دائن</label>
+          <input class="input num" data-credit type="number" step="0.01" min="0" value="0" inputmode="decimal" /></div>
+      </div>
+      <div class="field"><label class="field__label">البيان</label>
+        <input class="input" data-description placeholder="اختياري" /></div>
+    </div>`);
+    node.querySelector("[data-remove]").onclick = () => {
+      node.remove();
+      recalc();
+    };
+    node.addEventListener("input", recalc);
+    linesHost.appendChild(node);
+  }
+
+  function collect() {
+    return [...linesHost.querySelectorAll(".line-editor")].map((node) => ({
+      account_id: Number(node.querySelector("[data-account]").value),
+      debit: Number(node.querySelector("[data-debit]").value) || 0,
+      credit: Number(node.querySelector("[data-credit]").value) || 0,
+      description: node.querySelector("[data-description]").value.trim(),
+    }));
+  }
+
   function recalc() {
-    let dr = 0, cr = 0;
-    box.querySelectorAll(".j-line").forEach((w) => {
-      dr += num($(".j-dr", w).value);
-      cr += num($(".j-cr", w).value);
-    });
-    $("#j-dr", form).textContent = fmt(dr);
-    $("#j-cr", form).textContent = fmt(cr);
+    const lines = collect();
+    const debits = lines.reduce((sum, line) => sum + line.debit, 0);
+    const credits = lines.reduce((sum, line) => sum + line.credit, 0);
+    const diff = debits - credits;
+    view.querySelector("[data-debits]").textContent = money(debits);
+    view.querySelector("[data-credits]").textContent = money(credits);
+    const diffNode = view.querySelector("[data-diff]");
+    diffNode.textContent = money(diff);
+    diffNode.style.color = Math.abs(diff) < 0.005 ? "var(--ok-fg)" : "var(--danger-fg)";
+    const submit = view.querySelector("button[type=submit]");
+    submit.disabled = Math.abs(diff) >= 0.005;
   }
-  $("#j-add", form).onclick = addLine;
-  addLine(); addLine();
-  const closeSheet = sheet("قيد يدوي", form);
-  form.onsubmit = async (e) => {
-    e.preventDefault();
-    const lines = [];
-    box.querySelectorAll(".j-line").forEach((w) => {
-      const dr = num($(".j-dr", w).value), cr = num($(".j-cr", w).value);
-      if (!dr && !cr) return;
-      lines.push({
-        account_id: Number($(".j-acc", w).value),
-        contact_id: $(".j-contact", w).value ? Number($(".j-contact", w).value) : null,
-        debit: dr,
-        credit: cr,
-      });
-    });
+
+  view.querySelector("[data-add]").onclick = () => {
+    addLine();
+    addLine();
+  };
+
+  view.onsubmit = async (event) => {
+    event.preventDefault();
+    const submit = view.querySelector("button[type=submit]");
+    submit.disabled = true;
+    submit.textContent = "جارٍ الترحيل...";
     try {
       await api("/journal", {
         method: "POST",
-        body: JSON.stringify({ date: $("#j-date", form).value, memo: $("#j-memo", form).value, reference: "", lines }),
+        body: {
+          entry_date: view.querySelector("#entry_date").value,
+          memo: view.querySelector("#memo").value.trim(),
+          reference: view.querySelector("#reference").value.trim(),
+          lines: collect(),
+        },
       });
-      closeSheet();
-      toast("تم ترحيل القيد");
-      render();
-    } catch (err) { toast(err.message, true); }
+      toast("تم ترحيل القيد", "success");
+      location.hash = "#/journal";
+    } catch (error) {
+      toast(error.message, "error");
+      submit.textContent = "ترحيل القيد";
+      recalc();
+    }
+  };
+
+  addLine();
+  addLine();
+  recalc();
+  setScreen(view, { appbar: appbar({ title: "قيد يدوي", back: "#/journal" }) });
+}
+
+// ---------------------------------------------------------------- settings
+
+function openMenu() {
+  const close = openSheet(
+    "الإعدادات",
+    el(`<div>
+      <div class="card">
+        <div class="list__meta">مسجّل الدخول</div>
+        <div class="list__title">${escapeHtml(store.user?.email || "")}</div>
+        <div class="list__meta">${escapeHtml(store.user?.full_name || "")}</div>
+      </div>
+      <div class="section-title">الشركات</div>
+      <div class="card card--flush">
+        <ul class="list">${store.memberships
+          .map(
+            (m) => `<li><button class="list__item" data-company="${m.company.id}">
+            <div class="list__main"><div class="list__title">${escapeHtml(m.company.name)}</div>
+              <div class="list__meta">${m.company.base_currency} · ${m.role}</div></div>
+            ${m.company.id === store.companyId ? '<span style="color:var(--brand-700)">✓</span>' : ""}
+            </button></li>`
+          )
+          .join("")}</ul>
+      </div>
+      <div class="card card--flush">
+        <ul class="list"><li><a class="list__item" href="#/settings" data-settings-link>
+          <span style="font-size:1.4rem">⚙️</span>
+          <div class="list__main"><div class="list__title">الإعدادات والضرائب</div>
+            <div class="list__meta">بيانات الشركة وأكواد الضريبة</div></div>
+          <span style="color:var(--ink-400)">‹</span></a></li></ul>
+      </div>
+      <div class="card">
+        <div class="list__meta">النسخة</div><div class="list__title">OpenBooks 1.0</div>
+        <div class="list__meta">المنطقة الزمنية: ${Intl.DateTimeFormat().resolvedOptions().timeZone}</div>
+      </div>
+      <button class="btn btn--danger btn--block" data-logout>تسجيل الخروج</button>
+    </div>`)
+  );
+
+  document.querySelectorAll("[data-company]").forEach((button) => {
+    button.onclick = () => {
+      store.companyId = Number(button.dataset.company);
+      store.cache = { accounts: null, contacts: null };
+      close();
+      location.hash = "#/dashboard";
+      route();
+    };
+  });
+  document.querySelector("[data-logout]").onclick = async () => {
+    try {
+      await api("/auth/logout", { method: "POST", body: { refresh_token: store.session.refresh_token } });
+    } catch {
+      /* logging out locally is enough */
+    }
+    store.reset();
+    close();
+    renderAuth("login");
   };
 }
 
-/* ---------------- events ---------------- */
-$("#login-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
+// ---------------------------------------------------------------- settings
+
+const SETTING_FIELDS = [
+  { key: "company_name", label: "اسم الشركة", type: "text" },
+  { key: "tax_number", label: "الرقم الضريبي", type: "text" },
+  { key: "phone", label: "الهاتف", type: "tel" },
+  { key: "address", label: "العنوان", type: "text" },
+  { key: "currency", label: "العملة", type: "text" },
+  { key: "vat_rate", label: "نسبة الضريبة الافتراضية %", type: "number" },
+  { key: "invoice_terms_days", label: "مدة السداد (أيام)", type: "number" },
+  { key: "fiscal_year_start", label: "بداية السنة المالية (شهر-يوم)", type: "text" },
+  { key: "invoice_footer", label: "تذييل الفاتورة", type: "text" },
+];
+
+async function loadSettings() {
+  if (!store.cache.settings) store.cache.settings = await api("/settings");
+  return store.cache.settings;
+}
+
+// Settings hold the company's editable identity; the membership name is only
+// the fallback before settings load.
+function companyName() {
+  return store.cache.settings?.settings?.company_name || store.company?.name || "الرئيسية";
+}
+
+async function renderSettings() {
+  setScreen(spinner(), { appbar: appbar({ title: "الإعدادات" }), tabbar: tabbar() });
   try {
-    await login($("#username").value, $("#password").value);
-  } catch (err) {
-    toast(err.message, true);
+    const data = await loadSettings();
+    const accounts = await loadAccounts();
+    const taxAccounts = accounts.filter((a) => ["2200", "2300", "1300"].includes(a.code));
+
+    const view = el(`<div>
+      <div class="section-title">بيانات الشركة والضرائب</div>
+      <form class="card" data-settings-form>
+        ${SETTING_FIELDS.map(
+          (field) => `<div class="field"><label class="field__label">${field.label}</label>
+            <input class="input${field.type === "number" ? " num" : ""}" data-key="${field.key}"
+              type="${field.type}" value="${escapeHtml(data.settings[field.key] ?? "")}" /></div>`
+        ).join("")}
+        <button class="btn btn--block" type="submit">حفظ الإعدادات</button>
+      </form>
+
+      <div class="section-title">أكواد الضريبة</div>
+      <div class="card card--flush">
+        <ul class="list">${data.tax_codes
+          .map(
+            (code) => `<li class="list__item">
+              <div class="list__main">
+                <div class="list__title">${escapeHtml(code.name_ar || code.name)}
+                  <span class="badge">${Number(code.rate)}%</span></div>
+                <div class="list__meta">${escapeHtml(code.name)} · ${TAX_KIND_LABELS[code.kind] || code.kind}${
+                  code.is_active ? "" : " · موقوف"
+                }</div>
+              </div>
+              <button class="btn btn--ghost btn--sm" data-edit-tax="${code.id}">تعديل</button>
+            </li>`
+          )
+          .join("")}</ul>
+      </div>
+      <button class="btn btn--ghost btn--block" data-add-tax>＋ إضافة كود ضريبة</button>
+    </div>`);
+
+    view.querySelector("[data-settings-form]").onsubmit = async (event) => {
+      event.preventDefault();
+      const button = event.target.querySelector("button[type=submit]");
+      const settings = {};
+      view.querySelectorAll("[data-key]").forEach((input) => {
+        settings[input.dataset.key] = input.value.trim();
+      });
+      button.disabled = true;
+      button.textContent = "جارٍ الحفظ...";
+      try {
+        store.cache.settings = await api("/settings", { method: "PATCH", body: { settings } });
+        store.cache.accounts = null;
+        toast("تم حفظ الإعدادات", "success");
+        renderSettings();
+      } catch (error) {
+        toast(error.message, "error");
+        button.disabled = false;
+        button.textContent = "حفظ الإعدادات";
+      }
+    };
+
+    view.querySelectorAll("[data-edit-tax]").forEach((button) => {
+      const code = data.tax_codes.find((c) => c.id === Number(button.dataset.editTax));
+      button.onclick = () => openTaxCodeSheet(code, taxAccounts);
+    });
+    view.querySelector("[data-add-tax]").onclick = () => openTaxCodeSheet(null, taxAccounts);
+
+    setScreen(view, { appbar: appbar({ title: "الإعدادات" }), tabbar: tabbar() });
+  } catch (error) {
+    setScreen(emptyState("⚠️", "تعذّر تحميل الإعدادات", error.message), { tabbar: tabbar() });
   }
+}
+
+const TAX_KIND_LABELS = { vat: "ضريبة قيمة مضافة", withholding: "خصم وإضافة", other: "أخرى" };
+
+function openTaxCodeSheet(code, taxAccounts) {
+  const editing = Boolean(code);
+  const form = el(`<form novalidate>
+    <div class="field"><label class="field__label">الاسم بالعربية</label>
+      <input class="input" id="name_ar" value="${escapeHtml(code?.name_ar || "")}" required /></div>
+    <div class="field"><label class="field__label">الاسم بالإنجليزية</label>
+      <input class="input" id="name" value="${escapeHtml(code?.name || "")}" /></div>
+    <div class="field"><label class="field__label">النسبة %</label>
+      <input class="input num" id="rate" type="number" step="0.01" min="0" inputmode="decimal"
+        value="${code ? Number(code.rate) : 14}" required /></div>
+    <div class="field"><label class="field__label">النوع</label>
+      <select class="select" id="kind">
+        ${Object.entries(TAX_KIND_LABELS)
+          .map(
+            ([value, label]) =>
+              `<option value="${value}" ${code?.kind === value ? "selected" : ""}>${label}</option>`
+          )
+          .join("")}
+      </select></div>
+    <div class="field"><label class="field__label">حساب الضريبة</label>
+      <select class="select" id="account_id">
+        <option value="">— بدون —</option>
+        ${taxAccounts
+          .map(
+            (a) =>
+              `<option value="${a.id}" ${code?.account_id === a.id ? "selected" : ""}>${escapeHtml(
+                a.name_ar || a.name
+              )}</option>`
+          )
+          .join("")}
+      </select></div>
+    <button class="btn btn--block" type="submit">${editing ? "حفظ التعديلات" : "إضافة الكود"}</button>
+    ${editing && code.is_active ? '<button class="btn btn--danger btn--block" type="button" data-retire style="margin-top:8px">إيقاف الكود</button>' : ""}
+  </form>`);
+
+  const close = openSheet(editing ? "تعديل كود ضريبة" : "كود ضريبة جديد", form);
+
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    const button = form.querySelector("button[type=submit]");
+    const payload = {
+      name_ar: form.querySelector("#name_ar").value.trim(),
+      name: form.querySelector("#name").value.trim() || form.querySelector("#name_ar").value.trim(),
+      rate: Number(form.querySelector("#rate").value),
+      kind: form.querySelector("#kind").value,
+      account_id: Number(form.querySelector("#account_id").value) || null,
+    };
+    if (!payload.name_ar) return toast("أدخل اسم الكود", "error");
+
+    button.disabled = true;
+    try {
+      if (editing) {
+        await api(`/settings/tax-codes/${code.id}`, { method: "PATCH", body: payload });
+      } else {
+        await api("/settings/tax-codes", { method: "POST", body: payload });
+      }
+      store.cache.settings = null;
+      toast(editing ? "تم تحديث الكود" : "تمت إضافة الكود", "success");
+      close();
+      renderSettings();
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+    }
+  };
+
+  const retire = form.querySelector("[data-retire]");
+  if (retire) {
+    retire.onclick = async () => {
+      if (!(await confirmDialog("إيقاف كود الضريبة؟ لن يظهر في الفواتير الجديدة."))) return;
+      try {
+        await api(`/settings/tax-codes/${code.id}`, { method: "DELETE" });
+        store.cache.settings = null;
+        toast("تم إيقاف الكود", "success");
+        close();
+        renderSettings();
+      } catch (error) {
+        toast(error.message, "error");
+      }
+    };
+  }
+}
+
+// ---------------------------------------------------------------- router
+
+function route() {
+  const hash = location.hash || "#/dashboard";
+  const [path, query] = hash.split("?");
+  const [, segment, param] = path.split("/");
+  const params = new URLSearchParams(query || "");
+  app.dataset.route = hash;
+
+  const publicRoutes = ["login"];
+  if (!store.session && !publicRoutes.includes(segment)) {
+    renderAuth("login");
+    return;
+  }
+  if (store.session && segment === "login") {
+    location.hash = "#/dashboard";
+    return;
+  }
+
+  switch (segment) {
+    case "dashboard":
+      return renderDashboard();
+    case "invoices":
+      return param === "new" ? renderInvoiceForm() : param ? renderInvoiceDetail(param) : renderInvoices();
+    case "payments":
+      return renderPayments({ autoNew: params.get("new") });
+    case "contacts":
+      return param ? renderContactDetail(param) : renderContacts();
+    case "reports":
+      return param ? renderReport(param) : renderReports();
+    case "journal":
+      return param === "new" ? renderJournalForm() : renderJournal();
+    case "settings":
+      return renderSettings();
+    default:
+      location.hash = "#/dashboard";
+  }
+}
+
+// Global click delegation: navigation and menu actions work from any screen.
+document.addEventListener("click", (event) => {
+  const nav = event.target.closest("[data-nav]");
+  if (nav) {
+    event.preventDefault();
+    location.hash = nav.dataset.nav;
+    return;
+  }
+  if (event.target.closest('[data-action="menu"]')) openMenu();
 });
-$("#logout-btn").addEventListener("click", logout);
-document.querySelectorAll("nav.tabbar button").forEach((b) => (b.onclick = () => go(b.dataset.route)));
+
+window.addEventListener("hashchange", route);
+window.addEventListener("online", () => toast("تم استعادة الاتصال", "success"));
+window.addEventListener("offline", () => toast("لا يوجد اتصال بالإنترنت", "error"));
+
+async function bootstrap() {
+  const me = await api("/auth/me");
+  store.user = me.user;
+  store.memberships = me.memberships;
+  if (!store.memberships.length) {
+    toast("لا توجد شركة مرتبطة بحسابك", "error");
+    store.reset();
+    return renderAuth("login");
+  }
+  if (!store.memberships.some((m) => m.company.id === store.companyId)) {
+    store.companyId = store.memberships[0].company.id;
+  }
+  try {
+    await loadSettings();
+  } catch {
+    /* the header falls back to the membership name */
+  }
+  route();
+}
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));
 }
 
-boot();
+store.load();
+if (store.session) {
+  bootstrap().catch(() => {
+    store.reset();
+    renderAuth("login");
+  });
+} else {
+  renderAuth("login");
+}

@@ -1,15 +1,18 @@
 {
-  "name": "OpenBooks — محاسبة أونلاين",
+  "name": "OpenBooks — المحاسبة السحابية",
   "short_name": "OpenBooks",
-  "description": "نظام محاسبة متكامل يعمل على الموبايل",
-  "start_url": "/",
-  "display": "standalone",
-  "background_color": "#0f172a",
-  "theme_color": "#0f766e",
-  "orientation": "portrait-primary",
-  "dir": "rtl",
+  "description": "نظام محاسبة سحابي متعدد الشركات: فواتير، مدفوعات، تقارير مالية",
   "lang": "ar",
+  "dir": "rtl",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f8fafc",
+  "theme_color": "#0f766e",
+  "categories": ["business", "finance", "productivity"],
   "icons": [
-    { "src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+    { "src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
   ]
 }

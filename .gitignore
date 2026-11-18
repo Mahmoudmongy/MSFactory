@@ -6,3 +6,8 @@ server.log
 venv/
 .env
 .DS_Store
+.coverage
+.pytest_cache/
+.hypothesis/
+.ruff_cache/
+.openhands/
