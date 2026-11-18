@@ -4,7 +4,9 @@ Layering: api (HTTP) -> services (transactions + business rules) ->
 repositories (tenant-scoped queries) -> db (models). Domain rules are pure and
 live in ``app.domain``.
 """
+import json
 import logging
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -64,7 +66,7 @@ app.include_router(api_router)
 # One place to bump when the frontend changes: index.html references
 # /static/app.js?v=<ASSET_VERSION>, so browsers and the service worker always
 # pick up the new files while still caching aggressively in between releases.
-ASSET_VERSION = "17"
+ASSET_VERSION = "18"
 
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -81,4 +83,20 @@ if STATIC_DIR.exists():
     @app.get("/", include_in_schema=False)
     def index():
         html = (STATIC_DIR / "index.html").read_text().replace("__ASSET_VERSION__", ASSET_VERSION)
+        return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+
+    @app.get("/showcase", include_in_schema=False)
+    def showcase():
+        """Live demo walkthrough: the real app in a phone frame, screen by screen.
+
+        Demo credentials come from the environment so they are never committed;
+        without them the page still renders as a static tour of the screens.
+        """
+        html = (STATIC_DIR / "showcase.html").read_text()
+        demo = {
+            "email": os.environ.get("MSFACTORY_DEMO_EMAIL", ""),
+            "password": os.environ.get("MSFACTORY_DEMO_PASSWORD", ""),
+        }
+        injection = f"<script>window.__MSFACTORY_DEMO__={json.dumps(demo)};</script>"
+        html = html.replace("</head>", f"{injection}\n</head>")
         return HTMLResponse(html, headers={"Cache-Control": "no-cache"})

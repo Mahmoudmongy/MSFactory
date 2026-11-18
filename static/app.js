@@ -2843,18 +2843,18 @@ async function answerQuestion(key, text = "") {
     const orders = await api("/production/work-orders");
     if (!orders.length) return answerCard("تكلفة أوامر الإنتاج", '<div class="list__meta">لا توجد أوامر إنتاج.</div>');
     const STATUS = { planned: "مخطّط", in_progress: "قيد التنفيذ", completed: "مكتمل", cancelled: "ملغي" };
-    // Cost per unit times produced quantity is the order's cost, because the
-    // service only finalises unit_cost when it receives the finished goods.
+    // unit_cost is only finalised when the finished goods are received, so a
+    // running order reports zero there while its consumed materials are already
+    // booked in material_cost. Use whichever is real rather than showing zero.
+    const orderCost = (o) => {
+      const perUnit = Number(o.unit_cost) * Number(o.produced_quantity);
+      return perUnit > 0 ? perUnit : Number(o.material_cost);
+    };
     return answerCard(
       "تكلفة أوامر الإنتاج",
       orders
         .slice(0, 5)
-        .map((o) =>
-          answerRow(
-            `${o.number} — ${STATUS[o.status] || o.status}`,
-            money(Number(o.unit_cost) * Number(o.produced_quantity || o.quantity))
-          )
-        )
+        .map((o) => answerRow(`${o.number} — ${STATUS[o.status] || o.status}`, money(orderCost(o))))
         .join("")
     );
   }
