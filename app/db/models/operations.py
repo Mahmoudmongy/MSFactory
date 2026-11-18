@@ -19,6 +19,9 @@ from ..base import Base, TenantMixin, TimestampMixin
 
 CONTACT_KINDS = ("customer", "supplier", "both")
 INVOICE_KINDS = ("sales", "purchase")
+# A return is its own document kind, not a negative invoice: it points back at
+# the invoice it reverses and is posted as the mirror of that invoice.
+RETURN_KINDS = ("sales_return", "purchase_return")
 INVOICE_STATUSES = ("draft", "issued", "partially_paid", "paid", "void")
 PAYMENT_KINDS = ("receive", "spend")
 
@@ -76,6 +79,10 @@ class Invoice(Base, TenantMixin, TimestampMixin):
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     issued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # Set on a return document: the invoice it reverses. Kept nullable so every
+    # ordinary invoice, and every row written before returns existed, stays valid.
+    return_of_id: Mapped[int | None] = mapped_column(ForeignKey("invoices.id"), nullable=True, index=True)
+
     contact = relationship("Contact")
     lines = relationship("InvoiceLine", back_populates="invoice", cascade="all, delete-orphan")
 
@@ -109,6 +116,10 @@ class InvoiceLine(Base, TenantMixin):
     cost_purchased: Mapped[Decimal] = mapped_column(Numeric(18, 4), default=0, nullable=False)
     quantity_manufactured: Mapped[Decimal] = mapped_column(Numeric(18, 4), default=0, nullable=False)
     quantity_purchased: Mapped[Decimal] = mapped_column(Numeric(18, 4), default=0, nullable=False)
+
+    # On a return line: the invoice line it gives back, so "how much is still
+    # returnable" is answerable without guessing which line a return matches.
+    source_line_id: Mapped[int | None] = mapped_column(ForeignKey("invoice_lines.id"), nullable=True)
 
     invoice = relationship("Invoice", back_populates="lines")
     item = relationship("Item")

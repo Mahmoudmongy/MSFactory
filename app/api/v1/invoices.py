@@ -9,7 +9,14 @@ from ...db.session import get_session
 from ...services.invoices import InvoiceService
 from ..v1.deps import Principal, require
 from ..v1.idempotency import replay_or_execute
-from ..v1.schemas import InvoiceCreate, InvoiceOut, InvoiceUpdate, VoidRequest
+from ..v1.schemas import (
+    InvoiceCreate,
+    InvoiceOut,
+    InvoiceUpdate,
+    ReturnableLine,
+    ReturnCreate,
+    VoidRequest,
+)
 
 router = APIRouter(prefix="/invoices", tags=["invoices"])
 
@@ -31,6 +38,43 @@ def get_invoice(
     db: Session = Depends(get_session),
 ):
     return InvoiceService(db, principal.company_id, principal.user.id).get(invoice_id)
+
+
+@router.get("/{invoice_id}/returnable", response_model=list[ReturnableLine])
+def returnable_lines(
+    invoice_id: int,
+    principal: Principal = Depends(require(Permission.INVOICE_VIEW)),
+    db: Session = Depends(get_session),
+):
+    """Per line of an invoice: what has been returned and what remains."""
+    return InvoiceService(db, principal.company_id, principal.user.id).returnable(invoice_id)
+
+
+@router.get("/{invoice_id}/returns", response_model=list[InvoiceOut])
+def list_returns(
+    invoice_id: int,
+    principal: Principal = Depends(require(Permission.INVOICE_VIEW)),
+    db: Session = Depends(get_session),
+):
+    return InvoiceService(db, principal.company_id, principal.user.id).returns_of(invoice_id)
+
+
+@router.post("/{invoice_id}/returns", response_model=InvoiceOut, status_code=status.HTTP_201_CREATED)
+def create_return(
+    invoice_id: int,
+    payload: ReturnCreate,
+    principal: Principal = Depends(require(Permission.INVOICE_MANAGE)),
+    db: Session = Depends(get_session),
+):
+    ret = InvoiceService(db, principal.company_id, principal.user.id).create_return(
+        invoice_id=invoice_id,
+        issue_date=payload.issue_date,
+        lines=[line.model_dump() for line in payload.lines],
+        notes=payload.notes,
+        status=payload.status,
+    )
+    db.commit()
+    return InvoiceOut.model_validate(ret)
 
 
 @router.post("", response_model=InvoiceOut, status_code=status.HTTP_201_CREATED)

@@ -49,7 +49,7 @@ class DashboardMixin:
         }
 
     def _outstanding_total(self, kind: str) -> object:
-        """What is still unpaid on issued invoices of one kind."""
+        """What is still unpaid on issued invoices of one kind, net of returns."""
         rows = self.db.execute(
             select(func.coalesce(func.sum(Invoice.total - Invoice.amount_paid), 0)).where(
                 Invoice.company_id == self.company_id,
@@ -57,7 +57,8 @@ class DashboardMixin:
                 Invoice.status.in_(("issued", "partially_paid")),
             )
         ).scalar()
-        return money(rows)
+        returned = sum(self.invoices.returned_totals(kind).values(), ZERO)
+        return money(rows) - returned
 
     def _inventory_value(self):
         value = self.db.execute(

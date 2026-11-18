@@ -32,9 +32,12 @@ class PartiesMixin:
         upto = upto or datetime.now(UTC).date()
         buckets = dict.fromkeys(AGING_BUCKETS, ZERO)
         per_contact: dict[int, dict] = {}
+        # A return reduces what the party still owes, so it is taken off the
+        # invoice it reverses before the balance is aged.
+        returned = self.invoices.returned_totals(kind)
 
         for invoice in self.invoices.outstanding_invoices(kind):
-            outstanding = money(invoice.total) - money(invoice.amount_paid)
+            outstanding = money(invoice.total) - money(invoice.amount_paid) - returned.get(invoice.id, ZERO)
             if outstanding <= ZERO:
                 continue
             days = (upto - invoice.issue_date).days

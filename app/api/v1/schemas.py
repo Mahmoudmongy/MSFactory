@@ -142,6 +142,28 @@ class InvoiceUpdate(BaseModel):
     lines: list[InvoiceLineIn] | None = None
 
 
+class ReturnLineIn(BaseModel):
+    line_id: int
+    quantity: Decimal = Decimal("0")
+
+
+class ReturnCreate(BaseModel):
+    issue_date: date
+    notes: str = ""
+    status: str = "issued"
+    lines: list[ReturnLineIn] = Field(min_length=1)
+
+
+class ReturnableLine(BaseModel):
+    line_id: int
+    description: str
+    item_id: int | None
+    quantity: Decimal
+    unit_price: Decimal
+    returned: Decimal
+    remaining: Decimal
+
+
 class InvoiceLineOut(ORMModel):
     id: int
     description: str
@@ -173,6 +195,7 @@ class InvoiceOut(ORMModel):
     amount_paid: Decimal
     currency: str
     notes: str
+    return_of_id: int | None = None
     lines: list[InvoiceLineOut] = []
 
 

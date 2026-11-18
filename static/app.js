@@ -198,6 +198,11 @@ export const statusLabel = (status) => STATUS_LABELS[status] || status;
 export const statusBadge = (status) =>
   `<span class="badge badge--${escapeHtml(status)}">${escapeHtml(statusLabel(status))}</span>`;
 
+// Document kinds that are returns (credit notes) rather than invoices. A return
+// mirrors the invoice it reverses, so the UI treats it read-only: it is fixed
+// by another return, not by editing or voiding it.
+export const RETURN_KINDS = ["sales_return", "purchase_return"];
+
 export function spinner() {
   return '<div class="spinner" role="status" aria-label="جارٍ التحميل"></div>';
 }
@@ -251,23 +256,181 @@ export function confirmDialog(message) {
 
 const app = document.getElementById("app");
 
-function setScreen(content, { appbar, tabbar, plain } = {}) {
+/* Sections shown in the sidebar, in the order the old app lists them. */
+const NAV_SECTIONS = [
+  { href: "#/dashboard", icon: "⌂", label: "الملخص" },
+  { href: "#/accounts", icon: "▤", label: "الحسابات النقدية والبنوك" },
+  { href: "#/contacts", icon: "♙", label: "العملاء والموردون" },
+  { href: "#/payments", icon: "↙", label: "المقبوضات والمدفوعات" },
+  { href: "#/invoices", icon: "▧", label: "الفواتير والمرتجعات" },
+  { href: "#/inventory", icon: "◇", label: "الأصناف والمخازن" },
+  { href: "#/production", icon: "⚙", label: "أوامر الإنتاج" },
+  { href: "#/ledger", icon: "☷", label: "شجرة الحسابات والميزان" },
+  { href: "#/reports", icon: "▥", label: "التقارير" },
+  { href: "#/statements", icon: "▦", label: "القوائم المالية" },
+  { href: "#/journal", icon: "≡", label: "قيود اليومية" },
+  { href: "#/team", icon: "♙", label: "الموظفون والصلاحيات" },
+  { href: "#/settings", icon: "⚙", label: "الإعدادات" },
+];
+
+function currentSegment() {
+  return (location.hash || "#/dashboard").replace(/^#\//, "").split(/[/?]/)[0];
+}
+
+function sidebar() {
+  const segment = currentSegment();
+  const links = NAV_SECTIONS.map((item) => {
+    const target = item.href.replace(/^#\//, "");
+    const active = segment === target || (segment === "" && target === "dashboard");
+    return `<a class="sidebar__link" href="${item.href}" ${active ? 'aria-current="page"' : ""}>
+      <span class="sidebar__icon">${item.icon}</span><span>${escapeHtml(item.label)}</span></a>`;
+  }).join("");
+  return el(`<aside class="sidebar" aria-label="أقسام البرنامج">
+    <div class="sidebar__brand"><span class="sidebar__mark">MS</span><span>MS-Factory</span></div>
+    <nav class="sidebar__nav">${links}</nav>
+    <div class="sidebar__footer">
+      <div class="sidebar__user">${escapeHtml(store.user?.full_name || store.user?.email || "")}</div>
+      <button class="sidebar__logout" type="button" data-logout>خروج</button>
+    </div>
+  </aside>`);
+}
+
+function toggleSidebar(open) {
+  const node = app.querySelector(".sidebar");
+  const overlay = app.querySelector(".sidebar-overlay");
+  if (!node) return;
+  const next = open ?? !node.classList.contains("is-open");
+  node.classList.toggle("is-open", next);
+  overlay?.classList.toggle("is-open", next);
+}
+
+function setScreen(content, { appbar: topbar, tabbar: bottomNav, plain } = {}) {
   app.innerHTML = "";
-  if (appbar) app.appendChild(appbar);
+  // Auth screens are a single centred column: no sidebar, no drawer, no nav.
+  if (!plain) app.appendChild(sidebar());
+  const column = el(`<div class="content"></div>`);
+  if (topbar) column.appendChild(topbar);
   const screen = el(`<main class="screen${plain ? " screen--plain" : ""}"></main>`);
   if (typeof content === "string") screen.innerHTML = content;
   else screen.appendChild(content);
-  app.appendChild(screen);
-  if (tabbar) app.appendChild(tabbar);
+  column.appendChild(screen);
+  app.appendChild(column);
+  if (!plain) {
+    app.appendChild(el(`<div class="sidebar-overlay" data-close-sidebar></div>`));
+    if (bottomNav) app.appendChild(bottomNav);
+  }
 }
 
 function appbar({ title, subtitle, back, actions = "" }) {
+  const dark = document.documentElement.dataset.theme === "dark";
   return el(`<header class="appbar">
+    <button class="icon-btn appbar__menu" data-toggle-sidebar aria-label="القائمة">☰</button>
     ${back ? `<button class="icon-btn" data-nav="${escapeHtml(back)}" aria-label="رجوع">→</button>` : ""}
     <h1 class="appbar__title">${escapeHtml(title)}
       ${subtitle ? `<span class="appbar__sub">${escapeHtml(subtitle)}</span>` : ""}</h1>
     ${actions}
+    <button class="icon-btn" data-open-theme aria-label="ألوان البرنامج">🎨</button>
+    <button class="icon-btn" data-toggle-dark aria-label="تبديل الوضع الليلي">${dark ? "☀" : "☾"}</button>
   </header>`);
+}
+
+/** Small popover for picking the accent colour, mirroring the old app's picker. */
+function openThemePicker() {
+  const current = JSON.parse(localStorage.getItem("msfactory.theme") || "null")?.name || "teal";
+  const swatches = Object.entries(THEME_PRESETS)
+    .map(
+      ([name, preset]) => `<button type="button" class="theme-choice" data-theme-choice="${name}"
+        aria-pressed="${name === current}"><i class="theme-swatch" style="--swatch:${preset.color}"></i>${THEME_LABELS[name]}</button>`
+    )
+    .join("");
+  const popover = el(`<div class="theme-popover" role="dialog" aria-label="ألوان البرنامج">
+    <div class="theme-popover__head"><strong>ألوان البرنامج</strong>
+      <button class="icon-btn" type="button" data-close-theme aria-label="إغلاق">✕</button></div>
+    <div class="theme-options">${swatches}</div>
+    <label class="theme-custom">لون مخصص
+      <input type="color" id="custom-theme" value="${THEME_PRESETS[current].color}" /></label>
+  </div>`);
+  const close = () => popover.remove();
+  popover.querySelector("[data-close-theme]").onclick = close;
+  popover.querySelectorAll("[data-theme-choice]").forEach((button) => {
+    button.onclick = () => {
+      applyTheme(button.dataset.themeChoice);
+      popover.querySelectorAll("[data-theme-choice]").forEach((b) => b.setAttribute("aria-pressed", String(b === button)));
+    };
+  });
+  popover.querySelector("#custom-theme").oninput = (event) => applyTheme("custom", event.target.value);
+  document.body.appendChild(popover);
+  setTimeout(() => {
+    const away = (event) => {
+      if (!popover.contains(event.target)) {
+        close();
+        document.removeEventListener("click", away, true);
+      }
+    };
+    document.addEventListener("click", away, true);
+  }, 0);
+}
+
+const THEME_LABELS = { teal: "تركواز", blue: "أزرق هادئ", green: "أخضر", purple: "بنفسجي", clay: "طوبي" };
+
+/* Theme: an accent colour plus a light/dark mode, both remembered per browser.
+   The accent only rewrites the brand tokens, so every component follows. */
+const THEME_PRESETS = {
+  teal: { color: "#0f766e", sidebar: "#1f2d3a" },
+  blue: { color: "#315b8a", sidebar: "#1d2b3f" },
+  green: { color: "#19764b", sidebar: "#20362c" },
+  purple: { color: "#7650a1", sidebar: "#30253b" },
+  clay: { color: "#b65a3a", sidebar: "#392923" },
+};
+
+function shadeBrand(hex) {
+  // Derive the lighter/darker brand steps from one accent so the palette stays coherent.
+  const c = hex.replace("#", "");
+  if (!/^[0-9a-f]{6}$/i.test(c)) return;
+  const mix = (i, factor) => {
+    const v = parseInt(c.slice(i, i + 2), 16);
+    return Math.round(factor > 1 ? v + (255 - v) * (factor - 1) : v * factor)
+      .toString(16)
+      .padStart(2, "0");
+  };
+  const root = document.documentElement.style;
+  root.setProperty("--brand-700", hex);
+  root.setProperty("--brand-600", `#${mix(0, 1.12)}${mix(2, 1.12)}${mix(4, 1.12)}`);
+  root.setProperty("--brand-500", `#${mix(0, 1.3)}${mix(2, 1.3)}${mix(4, 1.3)}`);
+  root.setProperty("--brand-200", `#${mix(0, 1.75)}${mix(2, 1.75)}${mix(4, 1.75)}`);
+  root.setProperty("--brand-100", `#${mix(0, 1.9)}${mix(2, 1.9)}${mix(4, 1.9)}`);
+  root.setProperty("--brand-50", `#${mix(0, 1.96)}${mix(2, 1.96)}${mix(4, 1.96)}`);
+}
+
+function applyTheme(name, color) {
+  const preset = THEME_PRESETS[name];
+  const accent = color || preset?.color || THEME_PRESETS.teal.color;
+  shadeBrand(accent);
+  document.documentElement.style.setProperty("--sidebar-bg", preset?.sidebar || "#1f2d3a");
+  try {
+    localStorage.setItem("msfactory.theme", JSON.stringify({ name, color: accent }));
+  } catch {
+    /* storage may be blocked in private mode; the theme still applies this session */
+  }
+}
+
+function applyDarkMode(dark) {
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  try {
+    localStorage.setItem("msfactory.dark", dark ? "1" : "0");
+  } catch {
+    /* ignore */
+  }
+}
+
+function loadTheme() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("msfactory.theme") || "null");
+    if (saved) applyTheme(saved.name, saved.color);
+    applyDarkMode(localStorage.getItem("msfactory.dark") === "1");
+  } catch {
+    /* ignore */
+  }
 }
 
 const TABS = [
@@ -285,6 +448,24 @@ function tabbar() {
     (tab) => `<a class="tabbar__item" href="${tab.href}" ${current.startsWith(tab.href) ? 'aria-current="page"' : ""}>
         <span class="tabbar__icon">${tab.icon}</span><span>${tab.label}</span></a>`
   ).join("")}</nav>`);
+}
+
+/* Sub-tabs inside a section (sales vs purchases, customers vs suppliers…). The
+   active tab is read from the hash query so a tab is linkable and survives a
+   reload; clicking one rewrites the query and re-routes. */
+function subTabs(group, tabs, active) {
+  return `<div class="subtabs">${tabs
+    .map(
+      (tab) => `<button class="subtabs__btn" type="button" data-subtab="${group}:${tab.key}"
+        aria-pressed="${tab.key === active}" ${tab.disabled ? "disabled" : ""}>${escapeHtml(tab.label)}</button>`
+    )
+    .join("")}</div>`;
+}
+
+/** The current value of a hash query parameter, e.g. #/invoices?view=purchases. */
+function hashParam(name, fallback = "") {
+  const query = (location.hash.split("?")[1] || "");
+  return new URLSearchParams(query).get(name) || fallback;
 }
 
 // ---------------------------------------------------------------- auth screens
@@ -460,13 +641,20 @@ async function renderInvoices() {
     const invoices = await api("/invoices");
     await loadContacts();
 
-    const rows = invoices
+    const view = hashParam("invoices", "sales");
+    const KIND_LABELS = {
+      sales: "فواتير البيع",
+      purchase: "فواتير الشراء",
+      sales_return: "مرتجعات البيع",
+      purchase_return: "مرتجعات الشراء",
+    };
+    const shown = invoices.filter((i) => i.kind === view);
+    const rows = shown
       .map(
         (invoice) => `<li><a class="list__item" href="#/invoices/${invoice.id}">
         <div class="list__main">
           <div class="list__title">${escapeHtml(contactName(invoice.contact_id))}</div>
-          <div class="list__meta">${escapeHtml(invoice.number)} · ${date(invoice.issue_date)}
-            · ${invoice.kind === "sales" ? "بيع" : "شراء"}</div>
+          <div class="list__meta">${escapeHtml(invoice.number)} · ${date(invoice.issue_date)}</div>
         </div>
         <div style="text-align:end">
           <div class="list__value num">${money(invoice.total, invoice.currency)}</div>
@@ -477,8 +665,18 @@ async function renderInvoices() {
 
     setScreen(
       el(`<div>
+        ${subTabs(
+          "invoices",
+          [
+            { key: "sales", label: "بيع" },
+            { key: "purchase", label: "شراء" },
+            { key: "sales_return", label: "مرتجع بيع" },
+            { key: "purchase_return", label: "مرتجع شراء" },
+          ],
+          view
+        )}
         <div class="card card--flush">
-          ${invoices.length ? `<ul class="list">${rows}</ul>` : emptyState("🧾", "لا توجد فواتير", "أنشئ فاتورة بيع أو شراء")}
+          ${shown.length ? `<ul class="list">${rows}</ul>` : emptyState("🧾", "لا توجد مستندات", `${KIND_LABELS[view]} ستظهر هنا`)}
         </div>
         <div class="action-bar"><a class="btn" href="#/invoices/new">＋ فاتورة جديدة</a></div>
       </div>`),
@@ -487,6 +685,75 @@ async function renderInvoices() {
   } catch (error) {
     setScreen(emptyState("⚠️", "خطأ", error.message), { tabbar: tabbar() });
   }
+}
+
+/** Bottom sheet to pick returnable lines off an invoice and return them. */
+async function openReturnSheet(invoiceId, onDone) {
+  let close = () => {};
+  let lines = [];
+  try {
+    lines = await api(`/invoices/${invoiceId}/returnable`);
+  } catch (error) {
+    toast(error.message, "error");
+    return;
+  }
+  const open = lines.filter((l) => Number(l.remaining) > 0);
+  if (!open.length) {
+    toast("لا يوجد بند متبقٍ للإرجاع", "error");
+    return;
+  }
+
+  const form = el(`<form novalidate>
+    <div class="field"><label class="field__label" for="rdate">تاريخ المرتجع</label>
+      <input class="input" type="date" id="rdate" value="${today()}" required /></div>
+    <div class="section-title">البنود المتاحة للإرجاع</div>
+    <div class="card card--flush">
+      <ul class="list">${open
+        .map(
+          (l) => `<li class="list__item" style="cursor:default">
+          <div class="list__main">
+            <div class="list__title">${escapeHtml(l.description || "—")}</div>
+            <div class="list__meta">متاح ${Number(l.remaining)} من ${Number(l.quantity)} · ${money(l.unit_price)}</div>
+          </div>
+          <input class="input num" style="max-width:96px" type="number" inputmode="decimal"
+            min="0" max="${Number(l.remaining)}" step="0.01" value="0"
+            data-return-qty="${l.line_id}" aria-label="الكمية المرتجعة" /></li>`
+        )
+        .join("")}</ul>
+    </div>
+    <div class="field"><label class="field__label" for="rnotes">ملاحظات</label>
+      <textarea class="textarea" id="rnotes" placeholder="اختياري"></textarea></div>
+    <div class="action-bar">
+      <button class="btn" type="submit">حفظ المرتجع</button>
+      <button class="btn btn--ghost" type="button" data-cancel>إلغاء</button>
+    </div>
+  </form>`);
+
+  form.querySelector("[data-cancel]").onclick = () => close();
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    const payload = {
+      issue_date: form.querySelector("#rdate").value,
+      notes: form.querySelector("#rnotes").value,
+      lines: [...form.querySelectorAll("[data-return-qty]")]
+        .map((input) => ({ line_id: Number(input.dataset.returnQty), quantity: Number(input.value) }))
+        .filter((l) => l.quantity > 0),
+    };
+    if (!payload.lines.length) {
+      toast("أدخل كمية مرتجعة لبند واحد على الأقل", "error");
+      return;
+    }
+    try {
+      await api(`/invoices/${invoiceId}/returns`, { method: "POST", body: payload });
+      toast("تم إنشاء المرتجع", "success");
+      close();
+      onDone?.();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  };
+
+  close = openSheet("مرتجع جديد", form);
 }
 
 async function renderInvoiceForm({ invoiceId } = {}) {
@@ -750,7 +1017,10 @@ async function renderInvoiceDetail(invoiceId) {
       <div class="card">
         <div class="card__head">
           <div><h2 class="card__title">${escapeHtml(invoice.number)}</h2>
-            <div class="list__meta">${escapeHtml(contactName(invoice.contact_id))}</div></div>
+            <div class="list__meta">${escapeHtml(contactName(invoice.contact_id))}</div>
+            ${RETURN_KINDS.includes(invoice.kind)
+              ? `<div class="list__meta">${invoice.kind === "sales_return" ? "مرتجع بيع" : "مرتجع شراء"}</div>`
+              : ""}</div>
           ${statusBadge(invoice.status)}
         </div>
         <div class="totals__row"><span>تاريخ الإصدار</span><span class="num">${date(invoice.issue_date)}</span></div>
@@ -786,12 +1056,16 @@ async function renderInvoiceDetail(invoiceId) {
       ${invoice.notes ? `<div class="card"><div class="card__title">ملاحظات</div>
         <p style="margin:8px 0 0;color:var(--ink-700)">${escapeHtml(invoice.notes)}</p></div>` : ""}
 
+      <div id="returns-block"></div>
+
       <div class="row-actions">
         ${invoice.status !== "void" && outstanding > 0 && store.can("payment.manage")
           ? '<button class="btn" data-pay>💵 تسجيل دفعة</button>' : ""}
-        ${invoice.status !== "void" && Number(invoice.amount_paid) === 0 && store.can("invoice.manage")
+        ${!RETURN_KINDS.includes(invoice.kind) && ["issued", "partially_paid", "paid"].includes(invoice.status) && store.can("invoice.manage")
+          ? '<button class="btn btn--ghost" data-return>↩ مرتجع</button>' : ""}
+        ${invoice.status !== "void" && Number(invoice.amount_paid) === 0 && !RETURN_KINDS.includes(invoice.kind) && store.can("invoice.manage")
           ? '<button class="btn btn--ghost" data-edit>✎ تعديل الفاتورة</button>' : ""}
-        ${invoice.status !== "void" && store.can("invoice.manage")
+        ${invoice.status !== "void" && !RETURN_KINDS.includes(invoice.kind) && store.can("invoice.manage")
           ? '<button class="btn btn--danger" data-void>إلغاء الفاتورة</button>' : ""}
       </div>
     </div>`);
@@ -831,6 +1105,38 @@ async function renderInvoiceDetail(invoiceId) {
           toast(error.message, "error");
         }
       };
+    }
+
+    const returnButton = view.querySelector("[data-return]");
+    if (returnButton) {
+      returnButton.onclick = () => openReturnSheet(invoiceId, () => renderInvoiceDetail(invoiceId));
+    }
+
+    // A return is a separate document pointing back here; showing them under
+    // the invoice is what makes "how much of this was given back" answerable.
+    const returnsBlock = view.querySelector("#returns-block");
+    if (returnsBlock && !RETURN_KINDS.includes(invoice.kind)) {
+      api(`/invoices/${invoiceId}/returns`)
+        .then((returns) => {
+          if (!returns.length) return;
+          const total = returns.reduce((sum, r) => sum + Number(r.total), 0);
+          returnsBlock.innerHTML = `<div class="section-title">المرتجعات</div>
+            <div class="card card--flush">
+              <ul class="list">${returns
+                .map(
+                  (r) => `<li><a class="list__item" href="#/invoices/${r.id}">
+                <div class="list__main">
+                  <div class="list__title">${escapeHtml(r.number)}</div>
+                  <div class="list__meta">${date(r.issue_date)}</div>
+                </div>
+                <div class="list__value num">${money(r.total)}</div></a></li>`
+                )
+                .join("")}</ul>
+              <div class="totals"><div class="totals__row totals__row--grand">
+                <span>إجمالي المرتجعات</span><span class="num">${money(total)}</span></div></div>
+            </div>`;
+        })
+        .catch(() => {});
     }
 
     setScreen(view, { appbar: appbar({ title: invoice.number, back: "#/invoices" }) });
@@ -1665,12 +1971,12 @@ async function renderReports() {
   }
 }
 
-async function renderReport(key, params = {}) {
+async function renderReport(key, params = {}, back = "#/reports") {
   const catalog = await loadReportCatalog().catch(() => null);
   const spec =
     catalog?.categories.flatMap((c) => c.reports).find((r) => r.key === key) ||
     { key, label: "تقرير", params: [], icon: "📄" };
-  setScreen(spinner(), { appbar: appbar({ title: spec.label, back: "#/reports" }) });
+  setScreen(spinner(), { appbar: appbar({ title: spec.label, back }) });
 
   const draw = async () => {
     const query = new URLSearchParams(params).toString();
@@ -1698,7 +2004,7 @@ async function renderReport(key, params = {}) {
       if (input) input.value = value;
     }
     view.querySelector("[data-run]")?.addEventListener("click", () =>
-      renderReport(key, isPivot ? pivotParams(view) : reportParams(view, spec))
+      renderReport(key, isPivot ? pivotParams(view) : reportParams(view, spec), back)
     );
     view.querySelector("[data-export]").addEventListener("click", async (event) => {
       event.target.disabled = true;
@@ -1711,13 +2017,13 @@ async function renderReport(key, params = {}) {
       }
     });
 
-    setScreen(view, { appbar: appbar({ title: spec.label, back: "#/reports" }) });
+    setScreen(view, { appbar: appbar({ title: spec.label, back }) });
   };
 
   try {
     await draw();
   } catch (error) {
-    setScreen(emptyState("⚠️", "تعذّر تحميل التقرير", error.message), { appbar: appbar({ title: spec.label, back: "#/reports" }) });
+    setScreen(emptyState("⚠️", "تعذّر تحميل التقرير", error.message), { appbar: appbar({ title: spec.label, back }) });
   }
 }
 
@@ -1864,7 +2170,182 @@ async function renderJournalForm() {
   setScreen(view, { appbar: appbar({ title: "قيد يدوي", back: "#/journal" }) });
 }
 
+// ------------------------------------------------- accounts (cash & banks)
+
+/* Cash and bank accounts are ordinary ledger accounts filtered by the codes the
+   chart of accounts reserves for them, so no separate table is needed. */
+async function renderAccounts() {
+  setScreen(spinner(), { appbar: appbar({ title: "الحسابات النقدية والبنوك" }), tabbar: tabbar() });
+  try {
+    const accounts = await loadAccounts(true);
+    const cash = accounts.filter(
+      (a) => !a.is_group && /^(1[01]\d\d)/.test(a.code) && /(نقد|بنك|خزينة|صندوق|cash|bank)/i.test(`${a.name} ${a.name_ar}`)
+    );
+    const rows = cash
+      .map(
+        (a) => `<li><a class="list__item" href="#/ledger/${a.id}">
+        <div class="list__main"><div class="list__title">${escapeHtml(a.name_ar || a.name)}</div>
+          <div class="list__meta num">${escapeHtml(a.code)}</div></div>
+        <span style="color:var(--ink-400)">‹</span></a></li>`
+      )
+      .join("");
+    setScreen(
+      el(`<div>
+        <div class="card card--flush">
+          ${cash.length ? `<ul class="list">${rows}</ul>` : emptyState("🏦", "لا توجد حسابات نقدية", "أضف حسابات النقدية والبنوك من دليل الحسابات")}
+        </div>
+        <div class="action-bar"><a class="btn btn--ghost" href="#/ledger">دليل الحسابات</a></div>
+      </div>`),
+      { appbar: appbar({ title: "الحسابات النقدية والبنوك" }), tabbar: tabbar() }
+    );
+  } catch (error) {
+    setScreen(emptyState("⚠️", "خطأ", error.message), { tabbar: tabbar() });
+  }
+}
+
+// ------------------------------------------------- inventory (items & warehouses)
+
+async function renderInventory() {
+  setScreen(spinner(), { appbar: appbar({ title: "الأصناف والمخازن" }), tabbar: tabbar() });
+  try {
+    const [stock, summary, warehouses] = await Promise.all([
+      api("/inventory/stock"),
+      api("/inventory/summary"),
+      api("/inventory/warehouses"),
+    ]);
+    const rows = stock
+      .map(
+        (s) => `<tr>
+        <td>${escapeHtml(s.item_name_ar || s.item_name)}</td>
+        <td>${escapeHtml(s.warehouse_name)}</td>
+        <td>${escapeHtml(s.unit)}</td>
+        <td class="num">${Number(s.quantity).toLocaleString("en-US")}</td>
+        <td class="num">${money(s.unit_cost)}</td>
+        <td class="num">${money(s.value)}</td></tr>`
+      )
+      .join("");
+    setScreen(
+      el(`<div>
+        <div class="kpi-grid">
+          <div class="kpi"><div class="kpi__label">قيمة المخزون</div>
+            <div class="kpi__value num">${money(summary.total_value)}</div></div>
+          <div class="kpi"><div class="kpi__label">عدد الأصناف</div>
+            <div class="kpi__value num">${Number(summary.item_count).toLocaleString("en-US")}</div></div>
+          <div class="kpi"><div class="kpi__label">عدد المخازن</div>
+            <div class="kpi__value num">${Number(summary.warehouse_count).toLocaleString("en-US")}</div></div>
+          <div class="kpi kpi--assets"><div class="kpi__label">طريقة التكلفة</div>
+            <div class="kpi__value" style="font-size:1rem">${escapeHtml(summary.costing_method)}</div></div>
+        </div>
+        <div class="card card--flush">
+          ${stock.length ? `<div class="table-wrap"><table>
+            <thead><tr><th>الصنف</th><th>المخزن</th><th>الوحدة</th><th class="num">الكمية</th>
+              <th class="num">تكلفة الوحدة</th><th class="num">القيمة</th></tr></thead>
+            <tbody>${rows}</tbody></table></div>`
+            : emptyState("📦", "لا يوجد مخزون", "أضف أصنافاً واستلم مخزوناً للبدء")}
+        </div>
+        <div class="card"><div class="card__head"><h2 class="card__title">المخازن</h2></div>
+          <div class="list__meta">${warehouses.map((w) => escapeHtml(w.name_ar || w.name)).join(" · ") || "لا توجد مخازن"}</div>
+        </div>
+      </div>`),
+      { appbar: appbar({ title: "الأصناف والمخازن" }), tabbar: tabbar() }
+    );
+  } catch (error) {
+    setScreen(emptyState("⚠️", "خطأ", error.message), { tabbar: tabbar() });
+  }
+}
+
+// ------------------------------------------------- ledger (chart of accounts)
+
+async function renderLedger(accountId) {
+  if (accountId) return renderReport("account-balances", {}, "#/ledger");
+  setScreen(spinner(), { appbar: appbar({ title: "شجرة الحسابات والميزان" }), tabbar: tabbar() });
+  try {
+    const [accounts, trial] = await Promise.all([loadAccounts(true), api("/reports/trial-balance")]);
+    const TYPE_LABELS = { asset: "الأصول", liability: "الالتزامات", equity: "حقوق الملكية", income: "الإيرادات", expense: "المصروفات" };
+    // One section per account type, parents bolded and children indented, so the
+    // chart reads as a tree rather than a flat list.
+    const byType = {};
+    for (const a of accounts) (byType[a.type] ||= []).push(a);
+    const tree = Object.entries(TYPE_LABELS)
+      .filter(([type]) => byType[type]?.length)
+      .map(
+        ([type, label]) => `<div class="section-title">${label}</div>
+        <div class="card card--flush"><ul class="list">${byType[type]
+          .map(
+            (a) => `<li><a class="list__item" href="#/ledger/${a.id}">
+            <div class="list__main" ${a.parent_id ? 'style="padding-inline-start:16px"' : ""}>
+              <div class="list__title" ${a.is_group ? 'style="font-weight:800"' : ""}>${escapeHtml(a.name_ar || a.name)}</div>
+              <div class="list__meta num">${escapeHtml(a.code)}</div></div>
+            <span style="color:var(--ink-400)">‹</span></a></li>`
+          )
+          .join("")}</ul></div>`
+      )
+      .join("");
+    const rows = (trial.rows || [])
+      .map(
+        (r) => `<tr><td class="num">${escapeHtml(String(r.code || ""))}</td>
+        <td>${escapeHtml(r.name_ar || r.name || "")}</td>
+        <td class="num">${money(r.debit)}</td><td class="num">${money(r.credit)}</td>
+        <td class="num">${money(r.balance)}</td></tr>`
+      )
+      .join("");
+    setScreen(
+      el(`<div>
+        ${tree || emptyState("📒", "لا توجد حسابات", "دليل الحسابات فارغ")}
+        ${rows ? `<div class="section-title">ميزان المراجعة</div>
+          <div class="card card--flush"><div class="table-wrap"><table>
+            <thead><tr><th class="num">رقم الحساب</th><th>اسم الحساب</th>
+              <th class="num">مدين</th><th class="num">دائن</th><th class="num">الرصيد</th></tr></thead>
+            <tbody>${rows}</tbody>
+            <tfoot><tr class="total-row"><td colspan="2">الإجمالي</td>
+              <td class="num">${money(trial.total_debit)}</td>
+              <td class="num">${money(trial.total_credit)}</td>
+              <td class="num">${trial.balanced ? "متوازن ✓" : "غير متوازن"}</td></tr></tfoot>
+          </table></div></div>` : ""}
+      </div>`),
+      { appbar: appbar({ title: "شجرة الحسابات والميزان" }), tabbar: tabbar() }
+    );
+  } catch (error) {
+    setScreen(emptyState("⚠️", "خطأ", error.message), { tabbar: tabbar() });
+  }
+}
+
+// ------------------------------------------------- statements (financials)
+
+async function renderStatements() {
+  const entries = [
+    { key: "income-statement", icon: "📈", label: "قائمة الدخل" },
+    { key: "balance-sheet", icon: "⚖️", label: "الميزانية العمومية" },
+    { key: "trial-balance", icon: "📋", label: "ميزان المراجعة" },
+    { key: "cash-flow", icon: "💧", label: "التدفق النقدي" },
+  ];
+  setScreen(
+    el(`<div>
+      <div class="card card--flush"><ul class="list">${entries
+        .map(
+          (e) => `<li><a class="list__item" href="#/statements/${e.key}">
+          <span style="font-size:1.3rem">${e.icon}</span>
+          <div class="list__main"><div class="list__title">${e.label}</div></div>
+          <span style="color:var(--ink-400)">‹</span></a></li>`
+        )
+        .join("")}</ul></div>
+    </div>`),
+    { appbar: appbar({ title: "القوائم المالية" }), tabbar: tabbar() }
+  );
+}
+
 // ---------------------------------------------------------------- settings
+
+/** Clear the session locally and on the server, then return to the login screen. */
+async function logout() {
+  try {
+    await api("/auth/logout", { method: "POST", body: { refresh_token: store.session.refresh_token } });
+  } catch {
+    /* logging out locally is enough */
+  }
+  store.reset();
+  renderAuth("login");
+}
 
 function openMenu() {
   const close = openSheet(
@@ -1919,14 +2400,8 @@ function openMenu() {
     };
   });
   document.querySelector("[data-logout]").onclick = async () => {
-    try {
-      await api("/auth/logout", { method: "POST", body: { refresh_token: store.session.refresh_token } });
-    } catch {
-      /* logging out locally is enough */
-    }
-    store.reset();
     close();
-    renderAuth("login");
+    await logout();
   };
 }
 
@@ -2269,6 +2744,14 @@ function route() {
       return param ? renderContactDetail(param) : renderContacts();
     case "reports":
       return param ? renderReport(param) : renderReports();
+    case "statements":
+      return param ? renderReport(param, {}, "#/statements") : renderStatements();
+    case "ledger":
+      return renderLedger(param ? Number(param) : null);
+    case "accounts":
+      return renderAccounts();
+    case "inventory":
+      return renderInventory();
     case "journal":
       return param === "new" ? renderJournalForm() : renderJournal();
     case "settings":
@@ -2289,6 +2772,22 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (event.target.closest('[data-action="menu"]')) openMenu();
+  if (event.target.closest("[data-toggle-sidebar]")) toggleSidebar();
+  if (event.target.closest("[data-close-sidebar]")) toggleSidebar(false);
+  if (event.target.closest("[data-logout]")) logout();
+  if (event.target.closest("[data-open-theme]")) openThemePicker();
+  if (event.target.closest("[data-subtab]")) {
+    const [group, key] = event.target.closest("[data-subtab]").dataset.subtab.split(":");
+    const [path] = location.hash.split("?");
+    location.hash = `${path}?${group}=${key}`;
+  }
+  if (event.target.closest("[data-toggle-dark]")) {
+    const dark = document.documentElement.dataset.theme !== "dark";
+    applyDarkMode(dark);
+    event.target.closest("[data-toggle-dark]").textContent = dark ? "☀" : "☾";
+  }
+  // A sidebar link navigates by hash, so the drawer must close by hand on phones.
+  if (event.target.closest(".sidebar__link")) toggleSidebar(false);
 });
 
 window.addEventListener("hashchange", route);
@@ -2320,6 +2819,7 @@ if ("serviceWorker" in navigator) {
 }
 
 store.load();
+loadTheme();
 if (store.session) {
   bootstrap().catch(() => {
     store.reset();
