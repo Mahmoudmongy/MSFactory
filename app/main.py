@@ -25,6 +25,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger("msfactory")
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+# The legacy screen set lives beside the modern app and is served on its own
+# path. It is a separate, self-contained interface: it has its own service
+# worker scope, its own assets and its own bootstrap, so the two never share
+# state or caches.
+LEGACY_DIR = Path(__file__).resolve().parent.parent / "legacy"
 
 app = FastAPI(
     title=f"{settings.app_name} API",
@@ -100,3 +105,9 @@ if STATIC_DIR.exists():
         injection = f"<script>window.__MSFACTORY_DEMO__={json.dumps(demo)};</script>"
         html = html.replace("</head>", f"{injection}\n</head>")
         return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+
+if LEGACY_DIR.exists():
+    # ``html=True`` serves index.html for directory requests and keeps the
+    # legacy service worker scoped to /app, so it can never intercept the
+    # modern app's requests.
+    app.mount("/app", StaticFiles(directory=LEGACY_DIR, html=True), name="legacy")

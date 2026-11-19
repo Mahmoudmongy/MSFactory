@@ -10,7 +10,7 @@ from ...db.session import get_session
 from ...repositories.core import ContactRepository
 from ...repositories.documents import InvoiceRepository, JournalRepository, PaymentRepository
 from ..v1.deps import Principal, require
-from ..v1.schemas import ContactCreate, ContactOut
+from ..v1.schemas import ContactCreate, ContactOut, ContactUpdate
 
 router = APIRouter(prefix="/contacts", tags=["contacts"])
 
@@ -34,6 +34,20 @@ def create_contact(
     result = ContactRepository(db, principal.company_id).add(contact)
     db.commit()
     return result
+
+
+@router.patch("/{contact_id}", response_model=ContactOut)
+def update_contact(
+    contact_id: int,
+    payload: ContactUpdate,
+    principal: Principal = Depends(require(Permission.CONTACT_MANAGE)),
+    db: Session = Depends(get_session),
+):
+    contact = ContactRepository(db, principal.company_id).get(contact_id)
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(contact, field, value)
+    db.commit()
+    return contact
 
 
 @router.get("/{contact_id}/statement")

@@ -481,3 +481,60 @@ class TestSettings:
             "/api/v1/settings", headers=auth(viewer_token), json={"settings": {"vat_rate": "1"}}
         )
         assert response.status_code == 403, response.text
+
+
+class TestEditEndpoints:
+    """The write bridge edits rows in place; those endpoints must accept it."""
+
+    def test_a_contact_can_be_edited(self, client, token):
+        contact = client.post(
+            "/api/v1/contacts",
+            headers=auth(token),
+            json={"name": "اسم قديم", "kind": "customer", "phone": "0100"},
+        ).json()
+
+        response = client.patch(
+            f"/api/v1/contacts/{contact['id']}",
+            headers=auth(token),
+            json={"name": "اسم جديد", "kind": "both", "phone": "0111"},
+        )
+        assert response.status_code == 200, response.text
+        updated = response.json()
+        assert updated["name"] == "اسم جديد"
+        assert updated["kind"] == "both"
+        assert updated["phone"] == "0111"
+
+    def test_editing_a_contact_keeps_untouched_fields(self, client, token):
+        contact = client.post(
+            "/api/v1/contacts",
+            headers=auth(token),
+            json={"name": "ثابت", "kind": "supplier", "email": "keep@acme.eg"},
+        ).json()
+
+        updated = client.patch(
+            f"/api/v1/contacts/{contact['id']}", headers=auth(token), json={"phone": "0122"}
+        ).json()
+        assert updated["email"] == "keep@acme.eg"
+        assert updated["kind"] == "supplier"
+
+    def test_an_account_name_can_be_edited(self, client, token):
+        accounts = client.get("/api/v1/accounts", headers=auth(token)).json()
+        leaf = next(a for a in accounts if not a["is_group"])
+
+        response = client.patch(
+            f"/api/v1/accounts/{leaf['id']}", headers=auth(token), json={"name_ar": "اسم معدّل"}
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["name_ar"] == "اسم معدّل"
+        assert response.json()["code"] == leaf["code"]
+
+    def test_a_contact_of_another_company_cannot_be_edited(self, client, token):
+        contact = client.post(
+            "/api/v1/contacts", headers=auth(token), json={"name": "خاص", "kind": "customer"}
+        ).json()
+        other = register(client, email="other@acme.eg", company="شركة أخرى")
+
+        response = client.patch(
+            f"/api/v1/contacts/{contact['id']}", headers=auth(other), json={"name": "مسروق"}
+        )
+        assert response.status_code == 404, response.text

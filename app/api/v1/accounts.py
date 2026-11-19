@@ -9,7 +9,7 @@ from ...db.models import Account
 from ...db.session import get_session
 from ...repositories.core import AccountRepository
 from ..v1.deps import Principal, require
-from ..v1.schemas import AccountCreate, AccountOut
+from ..v1.schemas import AccountCreate, AccountOut, AccountUpdate
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 
@@ -32,6 +32,20 @@ def create_account(
     result = AccountRepository(db, principal.company_id).add(account)
     db.commit()
     return result
+
+
+@router.patch("/{account_id}", response_model=AccountOut)
+def update_account(
+    account_id: int,
+    payload: AccountUpdate,
+    principal: Principal = Depends(require(Permission.ACCOUNT_MANAGE)),
+    db: Session = Depends(get_session),
+):
+    account = AccountRepository(db, principal.company_id).get(account_id)
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(account, field, value)
+    db.commit()
+    return account
 
 
 @router.get("/{account_id}/balance")

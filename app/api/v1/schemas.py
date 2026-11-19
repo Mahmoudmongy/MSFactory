@@ -74,6 +74,15 @@ class AccountCreate(BaseModel):
     description: str = ""
 
 
+class AccountUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    name_ar: str | None = None
+    description: str | None = None
+    is_group: bool | None = None
+    currency: str | None = None
+    parent_id: int | None = None
+
+
 class AccountOut(ORMModel):
     id: int
     code: str
@@ -106,6 +115,18 @@ class ContactOut(ORMModel):
     phone: str
     tax_number: str
     is_active: bool
+
+
+class ContactUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    kind: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    address: str | None = None
+    tax_number: str | None = None
+    credit_limit: Decimal | None = None
+    payment_terms_days: int | None = None
+    is_active: bool | None = None
 
 
 # --- invoices ---
