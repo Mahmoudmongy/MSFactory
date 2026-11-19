@@ -50,6 +50,7 @@ FOUR = Decimal("0.0001")
 # Accounts used to keep inventory and the books in step. INVENTORY_CODE,
 # DAMAGED_CODE and WIP_CODE come from the model layer so both agree.
 SHRINKAGE_CODE = "5600"
+CAPITAL_CODE = "3100"
 
 # Costing methods a company can choose between in settings.
 COSTING_METHODS = ("fifo", "weighted_average")
@@ -589,8 +590,14 @@ class InventoryService:
         if contra_account_id:
             contra = self.accounts.get(contra_account_id)
         if contra is None:
-            contra = self.accounts.by_code(INVENTORY_CODE)
-        if contra is None:
+            # A standalone inbound move with no stated counterpart is an
+            # opening balance, so it is funded by capital. An outbound one is a
+            # write-off. Falling back to the inventory account itself would post
+            # a debit and a credit to the same account, leaving inventory out of
+            # the books entirely.
+            fallback = CAPITAL_CODE if debit_inventory else SHRINKAGE_CODE
+            contra = self.accounts.by_code(fallback)
+        if contra is None or contra.id == inventory.id:
             return
 
         if debit_inventory:

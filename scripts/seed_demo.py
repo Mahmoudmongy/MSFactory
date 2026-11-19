@@ -104,6 +104,23 @@ def main() -> None:
 
     supplier = call("POST", "/contacts", token, name="مصنع الأخشاب الوطني", kind="supplier", phone="01005556666")
 
+    # --- opening cash, so the demo starts with a positive till ---------
+    accounts = {a["code"]: a for a in call("GET", "/accounts", token)}
+    capital = accounts["3100"]
+    cash = accounts["1010"]
+    call(
+        "POST",
+        "/journal",
+        token,
+        entry_date=day(-30),
+        memo="رصيد افتتاحي — النقدية ورأس المال",
+        reference="OPEN-CASH",
+        lines=[
+            {"account_id": cash["id"], "debit": "60000.00", "credit": "0"},
+            {"account_id": capital["id"], "debit": "0", "credit": "60000.00"},
+        ],
+    )
+
     # --- opening stock (received at purchase cost) --------------------
     for code, quantity in [("CHR-01", 120), ("TBL-01", 30), ("DRS-01", 40), ("BED-01", 25), ("SHF-01", 80)]:
         item = items[code]

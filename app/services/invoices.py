@@ -634,6 +634,8 @@ class InvoiceService:
         is_return = invoice.kind in RETURN_KINDS
 
         control = self.accounts.get_by_code(AR_CONTROL_CODE if is_sales else AP_CONTROL_CODE)
+        # Input and output VAT are netted on one account on purpose: the balance
+        # is then what is actually due to the tax authority.
         vat = self.accounts.by_code(VAT_PAYABLE_CODE)
         default_account = self.accounts.by_code(SALES_CODE if is_sales else COGS_CODE)
         inventory = self.accounts.by_code(INVENTORY_CODE)

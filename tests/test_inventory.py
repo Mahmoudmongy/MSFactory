@@ -192,6 +192,56 @@ def test_stock_count_shortage_books_shrinkage(db, company):
     assert inv.inventory_value() == D("85.00")
 
 
+def _inventory_account_balance(db, company_id: int) -> Decimal:
+    from sqlalchemy import func, select
+
+    from app.db.models import Account, JournalLine
+
+    return db.scalar(
+        select(
+            func.coalesce(func.sum(JournalLine.debit - JournalLine.credit), 0)
+        )
+        .join(Account, Account.id == JournalLine.account_id)
+        .where(Account.company_id == company_id, Account.code == "1200")
+    )
+
+
+def test_a_standalone_receipt_posts_inventory_against_capital(db, company):
+    """An opening balance must reach the ledger, not cancel itself out.
+
+    The counterpart used to default to the inventory account, which posted a
+    debit and a credit to 1200 and left the balance sheet showing no stock.
+    """
+    entity, uid = company
+    inv = svc(db, entity, uid)
+    item = inv.create_item(name="رصيد افتتاحي")
+    raw = inv.warehouses.by_code("RAW")
+
+    inv.receive(item_id=item.id, warehouse_id=raw.id, quantity=10, unit_cost=D("30"),
+                movement_date=date(2026, 1, 1), reference="رصيد افتتاحي")
+    db.commit()
+
+    assert _inventory_account_balance(db, entity.id) == D("300.0000")
+    assert inv.inventory_value() == D("300.00")
+
+
+def test_an_outbound_movement_without_a_counterpart_books_shrinkage(db, company):
+    entity, uid = company
+    inv = svc(db, entity, uid)
+    item = inv.create_item(name="صنف تالف")
+    raw = inv.warehouses.by_code("RAW")
+    inv.receive(item_id=item.id, warehouse_id=raw.id, quantity=10, unit_cost=D("10"),
+                movement_date=date(2026, 1, 1))
+    db.commit()
+
+    inv.issue(item_id=item.id, warehouse_id=raw.id, quantity=4,
+              movement_date=date(2026, 1, 5), kind="damage")
+    db.commit()
+
+    # 100 in, 40 written off: 60 must remain on the inventory account.
+    assert _inventory_account_balance(db, entity.id) == D("60.0000")
+
+
 def test_on_hand_rows_report_colour_and_value(db, company):
     entity, uid = company
     inv = svc(db, entity, uid)
