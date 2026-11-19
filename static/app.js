@@ -518,45 +518,31 @@ function hashParam(name, fallback = "") {
 
 // ---------------------------------------------------------------- auth screens
 
-function renderAuth(mode = "login") {
-  const isLogin = mode === "login";
+/** The sign-in screen. Accounts are created by an administrator from the team
+ * screen, so there is no self-service registration here. */
+function renderAuth() {
   const view = el(`<div class="auth screen--plain">
     <div class="auth__logo">
       <div class="auth__mark">MS</div>
       <h1 class="auth__title">MS-Factory</h1>
-      <p class="auth__sub">محاسبة سحابية لشركتك — من أي مكان</p>
+      <p class="auth__sub">نظام إدارة المحاسبة والمخازن</p>
     </div>
     <form novalidate>
-      ${isLogin ? "" : `<div class="field"><label class="field__label" for="full_name">الاسم</label>
-        <input class="input" id="full_name" name="full_name" autocomplete="name" placeholder="محمد أحمد" /></div>`}
       <div class="field">
         <label class="field__label" for="email">البريد الإلكتروني</label>
         <input class="input" id="email" name="email" type="email" inputmode="email" dir="ltr"
-          autocomplete="email" required placeholder="you@company.com" />
+          autocomplete="username" required placeholder="you@company.com" />
       </div>
       <div class="field">
         <label class="field__label" for="password">كلمة المرور</label>
         <input class="input" id="password" name="password" type="password" dir="ltr"
-          autocomplete="${isLogin ? "current-password" : "new-password"}" required
-          placeholder="${isLogin ? "••••••••" : "8 أحرف على الأقل"}" />
+          autocomplete="current-password" required placeholder="••••••••" />
       </div>
-      ${isLogin ? "" : `<div class="field"><label class="field__label" for="company_name">اسم الشركة</label>
-        <input class="input" id="company_name" name="company_name" required placeholder="شركة النور للتجارة" /></div>
-      <div class="field"><label class="field__label" for="country">الدولة</label>
-        <select class="select" id="country" name="country">
-          <option value="EG" selected>مصر</option><option value="SA">السعودية</option>
-          <option value="AE">الإمارات</option><option value="KW">الكويت</option>
-        </select></div>`}
-      <button class="btn btn--block" type="submit">${isLogin ? "تسجيل الدخول" : "إنشاء الحساب"}</button>
+      <button class="btn btn--block" type="submit">تسجيل الدخول</button>
     </form>
-    <p class="auth__switch">
-      ${isLogin ? "ليس لديك حساب؟" : "لديك حساب بالفعل؟"}
-      <button type="button" data-mode="${isLogin ? "register" : "login"}">
-        ${isLogin ? "أنشئ حساباً جديداً" : "سجّل الدخول"}</button>
-    </p>
+    <p class="auth__switch">للحصول على بيانات الدخول، تواصل مع مسؤول الشركة.</p>
   </div>`);
 
-  view.querySelector("[data-mode]").onclick = (event) => renderAuth(event.target.dataset.mode);
   view.querySelector("form").onsubmit = async (event) => {
     event.preventDefault();
     const form = event.target;
@@ -565,27 +551,12 @@ function renderAuth(mode = "login") {
     button.disabled = true;
     button.textContent = "جارٍ...";
     try {
-      if (isLogin) {
-        store.save(await api("/auth/login", { method: "POST", body: { email: data.email, password: data.password } }));
-      } else {
-        store.save(
-          await api("/auth/register", {
-            method: "POST",
-            body: {
-              email: data.email,
-              password: data.password,
-              full_name: data.full_name,
-              company_name: data.company_name,
-              country: data.country,
-            },
-          })
-        );
-      }
+      store.save(await api("/auth/login", { method: "POST", body: { email: data.email, password: data.password } }));
       await bootstrap();
     } catch (error) {
       toast(error.message, "error");
       button.disabled = false;
-      button.textContent = isLogin ? "تسجيل الدخول" : "إنشاء الحساب";
+      button.textContent = "تسجيل الدخول";
     }
   };
   setScreen(view, { plain: true });
@@ -2553,7 +2524,7 @@ async function logout() {
     /* logging out locally is enough */
   }
   store.reset();
-  renderAuth("login");
+  renderAuth();
 }
 
 function openMenu() {
@@ -3172,7 +3143,7 @@ function route() {
 
   const publicRoutes = ["login"];
   if (!store.session && !publicRoutes.includes(segment)) {
-    renderAuth("login");
+    renderAuth();
     return;
   }
   if (store.session && segment === "login") {
@@ -3256,7 +3227,7 @@ async function bootstrap() {
   if (!store.memberships.length) {
     toast("لا توجد شركة مرتبطة بحسابك", "error");
     store.reset();
-    return renderAuth("login");
+    return renderAuth();
   }
   if (!store.memberships.some((m) => m.company.id === store.companyId)) {
     store.companyId = store.memberships[0].company.id;
@@ -3278,8 +3249,8 @@ loadTheme();
 if (store.session) {
   bootstrap().catch(() => {
     store.reset();
-    renderAuth("login");
+    renderAuth();
   });
 } else {
-  renderAuth("login");
+  renderAuth();
 }

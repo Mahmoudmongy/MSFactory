@@ -78,6 +78,7 @@ function decodePayload(token) {
 }
 
 let cachedMe = null;
+let bootstrapPromise = null;
 
 async function fetchMe() {
   const { data, error } = await apiJson('/auth/me');
@@ -85,6 +86,30 @@ async function fetchMe() {
   cachedMe = data;
   return { data, error: null };
 }
+
+/**
+ * Load ``/bootstrap`` once per page load and share the result.
+ *
+ * Startup needs the caller's profile and every collection. Both used to be
+ * separate authenticated requests, and against a remote database each one paid
+ * its own round trip. The endpoint returns both, so the whole app now depends
+ * on a single request; only the ``me`` half is cached here, the collections are
+ * handed to the read bridge.
+ */
+export function loadBootstrap() {
+  if (!bootstrapPromise) {
+    bootstrapPromise = apiJson('/bootstrap').then(({ data, error }) => {
+      if (error) {
+        bootstrapPromise = null;
+        return { data: null, error };
+      }
+      if (data?.session) cachedMe = data.session;
+      return { data, error: null };
+    });
+  }
+  return bootstrapPromise;
+}
+
 
 /**
  * Build the profile shape the legacy screens expect.
@@ -151,12 +176,17 @@ export const supabase = {
           refresh: refreshed.data.refresh_token,
         });
       }
-      const me = await fetchMe();
-      if (me.error) {
+      const boot = await loadBootstrap();
+      if (boot.error) {
         clearTokens();
         return { data: { session: null }, error: null };
       }
-      return { data: { session: { user: userFromMe(me.data) } }, error: null };
+      const me = cachedMe;
+      if (!me) {
+        clearTokens();
+        return { data: { session: null }, error: null };
+      }
+      return { data: { session: { user: userFromMe(me) } }, error: null };
     },
 
     async signInWithPassword({ email, password }) {
@@ -166,8 +196,10 @@ export const supabase = {
       });
       if (error) return { data: { user: null }, error };
       writeTokens({ access: data.access_token, refresh: data.refresh_token });
-      const me = await fetchMe();
-      return { data: { user: me.data ? userFromMe(me.data) : null }, error: me.error };
+      bootstrapPromise = null;
+      const boot = await loadBootstrap();
+      const me = cachedMe;
+      return { data: { user: me ? userFromMe(me) : null }, error: boot.error || (me ? null : new Error('profile unavailable')) };
     },
 
     async signOut() {
@@ -180,6 +212,7 @@ export const supabase = {
       }
       clearTokens();
       cachedMe = null;
+      bootstrapPromise = null;
       return { error: null };
     },
 
@@ -197,6 +230,7 @@ export const supabase = {
       });
       if (error) return { error };
       writeTokens({ access: data.access_token, refresh: data.refresh_token });
+      bootstrapPromise = null;
       const me = await fetchMe();
       return {
         data: { session: { user: me.data ? userFromMe(me.data) : null } },

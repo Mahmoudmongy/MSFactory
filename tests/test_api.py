@@ -482,6 +482,39 @@ class TestSettings:
         )
         assert response.status_code == 403, response.text
 
+    def test_the_company_logo_survives_a_save_and_reload(self, client, token):
+        """The settings screen uploads a logo; every later read must return it."""
+        # Bigger than the 500-character column the other settings used to fit in.
+        logo = "data:image/png;base64," + "A" * 900
+
+        saved = client.patch(
+            "/api/v1/settings", headers=auth(token), json={"settings": {"logo": logo, "company_name": "مصنع النور"}}
+        )
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["settings"]["logo"] == logo
+
+        reloaded = client.get("/api/v1/settings", headers=auth(token))
+        assert reloaded.status_code == 200, reloaded.text
+        assert reloaded.json()["settings"]["logo"] == logo
+        assert reloaded.json()["settings"]["company_name"] == "مصنع النور"
+
+    @pytest.mark.parametrize(
+        "logo",
+        [
+            "javascript:alert(1)",
+            "data:text/html;base64,PHNjcmlwdD4=",
+            "https://example.com/logo.png",
+        ],
+    )
+    def test_only_real_images_can_be_stored_as_the_logo(self, client, token, logo):
+        response = client.patch("/api/v1/settings", headers=auth(token), json={"settings": {"logo": logo}})
+        assert response.status_code == 422, response.text
+
+    def test_a_logo_that_is_too_large_is_refused(self, client, token):
+        logo = "data:image/png;base64," + "A" * 400_001
+        response = client.patch("/api/v1/settings", headers=auth(token), json={"settings": {"logo": logo}})
+        assert response.status_code == 422, response.text
+
 
 class TestEditEndpoints:
     """The write bridge edits rows in place; those endpoints must accept it."""

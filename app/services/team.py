@@ -7,7 +7,7 @@ who belongs to several companies keeps one membership per company.
 from __future__ import annotations
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from ..core.errors import ConflictError, NotFoundError, ValidationError
 from ..core.permissions import Role
@@ -27,6 +27,7 @@ class TeamService:
         return list(
             self.db.scalars(
                 select(Membership)
+                .options(selectinload(Membership.user))
                 .where(Membership.company_id == self.company_id)
                 .order_by(Membership.id)
             )

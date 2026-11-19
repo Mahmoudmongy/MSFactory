@@ -194,8 +194,10 @@ class InventoryService:
             company_id=self.company_id,
             code=code,
             name=name,
+            name_ar=fields.get("name_ar", "") or "",
             parent_id=parent_id,
             is_group=fields.get("is_group", False),
+            kind=fields.get("kind", "") or "",
             address=fields.get("address", ""),
             notes=fields.get("notes", ""),
         )
@@ -207,6 +209,28 @@ class InventoryService:
             entity_id=warehouse.id,
             user_id=self.user_id,
             summary=f"مخزن {warehouse.code} — {warehouse.name}",
+        )
+        return warehouse
+
+    def update_warehouse(self, warehouse_id: int, **fields) -> Warehouse:
+        warehouse = self.warehouses.get(warehouse_id)
+        if "name" in fields and fields["name"] is not None:
+            name = fields["name"].strip()
+            if not name:
+                raise ValidationError("اسم المخزن مطلوب")
+            warehouse.name = name
+        for key in ("name_ar", "kind", "address", "notes"):
+            if fields.get(key) is not None:
+                setattr(warehouse, key, fields[key])
+        if "parent_id" in fields:
+            warehouse.parent_id = fields["parent_id"]
+        self.db.flush()
+        self.audit.record(
+            action="warehouse.update",
+            entity_type="warehouse",
+            entity_id=warehouse.id,
+            user_id=self.user_id,
+            summary=f"تعديل مخزن {warehouse.code} — {warehouse.name}",
         )
         return warehouse
 

@@ -35,6 +35,7 @@ from ..v1.schemas import (
     VariantOut,
     WarehouseCreate,
     WarehouseOut,
+    WarehouseUpdate,
 )
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
@@ -217,10 +218,26 @@ def create_warehouse(
     warehouse = _service(principal, db).create_warehouse(
         name=payload.name,
         code=payload.code,
+        name_ar=payload.name_ar,
         parent_id=payload.parent_id,
         is_group=payload.is_group,
+        kind=payload.kind,
         address=payload.address,
         notes=payload.notes,
+    )
+    db.commit()
+    return warehouse
+
+
+@router.patch("/warehouses/{warehouse_id}", response_model=WarehouseOut)
+def update_warehouse(
+    warehouse_id: int,
+    payload: WarehouseUpdate,
+    principal: Principal = Depends(require(Permission.WAREHOUSE_MANAGE)),
+    db: Session = Depends(get_session),
+):
+    warehouse = _service(principal, db).update_warehouse(
+        warehouse_id, **payload.model_dump(exclude_unset=True)
     )
     db.commit()
     return warehouse

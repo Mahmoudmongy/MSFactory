@@ -6,10 +6,10 @@
 (function(){
   'use strict';
   const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const money=v=>Number(v||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+  const money=v=>Number(v||0).toLocaleString('en-US',{maximumFractionDigits:2});
   const prefKey='ms-factory-preview-ui-v1';
   const colors={
-    teal:{label:'تركواز',color:'#0f766e',side:'#1f2d3a'},
+    teal:{label:'أزرق فيسبوك',color:'#1877f2',side:'#132a45'},
     blue:{label:'أزرق هادئ',color:'#315b8a',side:'#1d2b3f'},
     green:{label:'أخضر',color:'#19764b',side:'#20362c'},
     purple:{label:'بنفسجي',color:'#7650a1',side:'#30253b'},
@@ -23,24 +23,26 @@
 
   Object.assign(EN,{"لا توجد سندات مطابقة في الفترة المحددة":"No matching vouchers in the selected period","لا توجد مستندات مطابقة في الفترة المحددة":"No matching documents in the selected period","جزئي":"Partial"});
   Object.assign(EN,{"المرجع بالفاتورة الأصلية":"Original invoice reference","مرتبطة بفاتورة الشراء الأصلية":"Linked to original purchase invoice"});
-  TRK=null;
+  /* New dictionary entries were just added: force the translator to rebuild. */
+  TRR=null;
   function saveUiPrefs(){try{localStorage.setItem(prefKey,JSON.stringify(uiPrefs));}catch(_){}}
-  function colorShade(hex){const h=String(hex||'').replace('#','');if(!/^[0-9a-f]{6}$/i.test(h))return '#26313a';return '#'+[0,2,4].map(i=>Math.round(parseInt(h.slice(i,i+2),16)*.38).toString(16).padStart(2,'0')).join('');}
   function applyAccent(name,color,save=true){
     const preset=colors[name],value=/^#[0-9a-f]{6}$/i.test(color||'')?color:(preset?.color||colors.teal.color);
     const root=document.documentElement;
-    root.style.setProperty('--pr',value);
-    root.style.setProperty('--pr2',`color-mix(in srgb, ${value} 14%, var(--card))`);
-    root.style.setProperty('--factory-sidebar',preset?.side||colorShade(value));
+    // Only the accent is stored inline; --pr, --pr2 and --side derive from it
+    // in CSS so light and dark themes each get their own tuned variant.
+    root.style.setProperty('--accent',value);
+    root.style.removeProperty('--pr');
+    root.style.removeProperty('--pr2');
+    root.style.removeProperty('--factory-sidebar');
     document.querySelectorAll('[data-factory-accent]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.factoryAccent===name)));
     const input=document.getElementById('factory-custom-accent');if(input)input.value=value;
     if(save){uiPrefs.accent=name;uiPrefs.customColor=name==='custom'?value:'';saveUiPrefs();}
   }
   function appearanceScreen(){
-    const mode=PRF.theme||'',accent=uiPrefs.accent||'teal';
-    const modes=[['','افتراضي'],['light','نهاري'],['dark','ليلي']].map(([key,label])=>'<button type="button" class="g" data-factory-theme="'+key+'" aria-pressed="'+String(mode===key)+'">'+label+'</button>').join('');
+    const accent=uiPrefs.accent||'teal';
     const palette=Object.entries(colors).map(([key,c])=>'<button type="button" data-factory-accent="'+key+'" aria-pressed="'+String(accent===key)+'"><i style="--swatch:'+c.color+'"></i>'+c.label+'</button>').join('');
-    sh('<div class="factory-appearance-screen"><div class="ph"><h3>الأدوات والمظهر</h3>'+bk+'</div><section class="factory-settings-group"><h4>نمط العرض</h4><p class="mu">اختر الوضع الافتراضي أو النهاري أو الليلي. يُحفظ اختيارك على هذا الجهاز.</p><div class="factory-theme-modes">'+modes+'</div></section><section class="factory-settings-group"><h4>ألوان البرنامج</h4><div class="factory-theme-options">'+palette+'</div><label class="factory-custom-color">لون مخصص <input type="color" data-factory-custom-color value="'+(uiPrefs.customColor||colors[accent]?.color||colors.teal.color)+'"></label></section><section class="factory-settings-group"><h4>اللغة</h4><p class="mu">لغة القوائم والتقارير</p><button type="button" class="g" onclick="togLang()">'+(LANGEN?'Switch to Arabic':'العربية / English')+'</button></section></div>','الأدوات والمظهر');
+    sh('<div class="factory-appearance-screen"><div class="ph"><h3>الأدوات والمظهر</h3>'+bk+'</div><section class="factory-settings-group"><h4>ألوان البرنامج</h4><div class="factory-theme-options">'+palette+'</div><label class="factory-custom-color">لون مخصص <input type="color" data-factory-custom-color value="'+(uiPrefs.customColor||colors[accent]?.color||colors.teal.color)+'"></label></section><section class="factory-settings-group"><h4>اللغة</h4><p class="mu">لغة القوائم والتقارير</p><button type="button" class="g" onclick="togLang()">'+(LANGEN?'Switch to Arabic':'العربية / English')+'</button></section></div>','الأدوات والمظهر');
   }
   window.factoryAppearance=appearanceScreen;
   function setThemeMode(mode){PRF.theme=mode;savePref();applyPref();document.querySelectorAll('[data-factory-theme]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.factoryTheme===mode)));}
@@ -49,7 +51,6 @@
     const pop=document.createElement('section');pop.id='factory-theme-popover';pop.className='factory-theme-popover';pop.hidden=true;pop.setAttribute('role','dialog');pop.setAttribute('aria-label','ألوان البرنامج');
     pop.innerHTML='<div class="factory-theme-head"><strong>ألوان البرنامج</strong><button type="button" class="g factory-theme-close" aria-label="إغلاق">×</button></div><div class="factory-theme-options">'+Object.entries(colors).map(([key,c])=>'<button type="button" data-factory-accent="'+key+'" aria-pressed="false"><i style="--swatch:'+c.color+'"></i>'+c.label+'</button>').join('')+'</div><label class="factory-custom-color">لون مخصص <input id="factory-custom-accent" type="color" value="#0f766e"></label><button type="button" class="g factory-theme-reset">استعادة اللون الافتراضي</button>';
     document.body.appendChild(pop);
-    pop.querySelector('.factory-theme-options')?.insertAdjacentHTML('beforebegin','<div class="factory-theme-modes" aria-label="نمط العرض"><button type="button" data-factory-theme="">افتراضي</button><button type="button" data-factory-theme="light">نهاري</button><button type="button" data-factory-theme="dark">ليلي</button></div>');
     pop.addEventListener('click',e=>{const b=e.target.closest('[data-factory-accent]');if(b){applyAccent(b.dataset.factoryAccent,colors[b.dataset.factoryAccent].color);pop.hidden=true;return;}if(e.target.closest('.factory-theme-close')){pop.hidden=true;return;}if(e.target.closest('.factory-theme-reset')){applyAccent('teal',colors.teal.color);pop.hidden=true;}});
     pop.querySelector('#factory-custom-accent').addEventListener('input',e=>applyAccent('custom',e.target.value));
     document.addEventListener('pointerdown',e=>{if(!pop.hidden&&!pop.contains(e.target)&&!e.target.closest('#factory-theme-open'))pop.hidden=true;});
@@ -104,26 +105,130 @@
     const keys=Object.keys(data||{}),saved=Array.isArray(uiPrefs.summaryOrder)?uiPrefs.summaryOrder.filter(key=>keys.includes(key)):[];
     return [...saved,...keys.filter(key=>!saved.includes(key))];
   }
+  /* Whole blocks of the summary screen, as opposed to the individual metric
+     cards above. Order and visibility are saved per user on this device. */
+  const SUMMARY_SECTIONS={kpis:'المؤشرات',recent:'أحدث الحركات',balances:'الأرصدة المهمة',alerts:'تنبيهات تحتاج إجراء'};
+  function summarySectionOrder(){
+    const keys=Object.keys(SUMMARY_SECTIONS),saved=Array.isArray(uiPrefs.summarySections)?uiPrefs.summarySections.filter(key=>keys.includes(key)):[];
+    return [...saved,...keys.filter(key=>!saved.includes(key))];
+  }
+  function summarySectionHidden(key){return (uiPrefs.summarySectionsHidden||[]).includes(key);}
   function summarySettingsHtml(data,layout){
     return '<div class="factory-summary-settings" id="factory-summary-settings">'+summaryOrder(data).map((key,index,order)=>{const x=data[key];return '<div class="factory-summary-setting-row" data-summary-setting-key="'+key+'"><span class="factory-summary-setting-name">'+x.title+'</span><select aria-label="مكان '+x.title+'" data-summary-place="'+x.key+'"><option value="top">أعلى الملخص</option><option value="bottom">الأرصدة المهمة</option><option value="hidden">إخفاء</option></select><span class="factory-summary-order"><button type="button" class="g" data-summary-move="'+key+'" data-summary-direction="-1" aria-label="تقديم '+x.title+'" '+(index===0?'disabled':'')+'>▲</button><button type="button" class="g" data-summary-move="'+key+'" data-summary-direction="1" aria-label="تأخير '+x.title+'" '+(index===order.length-1?'disabled':'')+'>▼</button></span></div>';}).join('')+'</div>';
   }
+  /** Layout controls for the Settings screen. */
+  window.factorySummaryLayout={
+    titles:()=>{const d=metricData(),out={};Object.keys(d).forEach(k=>out[k]=d[k].title);return out;},
+    order:()=>summaryOrder(metricData()),
+    place:key=>summaryLayout(metricData())[key]||'hidden',
+    move(key,direction){
+      const order=summaryOrder(metricData()),index=order.indexOf(key),next=index+Number(direction);
+      if(index<0||next<0||next>=order.length)return;
+      order.splice(next,0,order.splice(index,1)[0]);
+      uiPrefs.summaryOrder=order;saveUiPrefs();
+    },
+    setPlace(key,value){uiPrefs.summary=uiPrefs.summary||{};uiPrefs.summary[key]=value;saveUiPrefs();},
+    sectionTitles:()=>SUMMARY_SECTIONS,
+    sections:()=>summarySectionOrder(),
+    sectionVisible:key=>!summarySectionHidden(key),
+    moveSection(key,direction){
+      const order=summarySectionOrder(),index=order.indexOf(key),next=index+Number(direction);
+      if(index<0||next<0||next>=order.length)return;
+      order.splice(next,0,order.splice(index,1)[0]);
+      uiPrefs.summarySections=order;saveUiPrefs();
+    },
+    setSectionVisible(key,visible){
+      const hidden=new Set(uiPrefs.summarySectionsHidden||[]);
+      visible?hidden.delete(key):hidden.add(key);
+      uiPrefs.summarySectionsHidden=[...hidden];saveUiPrefs();
+    }
+  };
+  /** Replace only the blocks under the period card, keeping its inputs alive. */
+  window.factorySummaryRefresh=function(){
+    if(typeof CUR==='undefined'||!CUR||CUR.kind!=='screen'||CUR.sid!=='home')return false;
+    const wrap=document.getElementById('m')?.firstElementChild;
+    if(!wrap)return false;
+    const data=metricData(),layout=summaryLayout(data),ordered=summaryOrder(data).map(key=>data[key]).filter(Boolean);
+    const top=ordered.filter(x=>layout[x.key]==='top'),bottom=ordered.filter(x=>layout[x.key]==='bottom');
+    const from=dfm(S.per?.from||''),to=dfm(S.per?.to||td());
+    const period=wrap.querySelector('.factory-summary-period');
+    if(period)period.querySelector('.home-period-heading>span').textContent='الفترة الحالية: '+from+' إلى '+to;
+    const blocks=summaryBlocks(data,top,bottom,from,to);
+    // Rebuild everything after the period card in one pass.
+    const keep=period?[...wrap.children].indexOf(period)+1:0;
+    [...wrap.children].slice(keep).forEach(node=>node.remove());
+    const frag=document.createElement('div');
+    frag.innerHTML=summaryBodyHtml(blocks);
+    [...frag.children].forEach(node=>wrap.appendChild(node));
+    return true;
+  };
   function summaryCard(x){
     return '<button type="button" class="factory-kpi" data-summary-screen="'+x.screen+'" data-summary-key="'+x.key+'" aria-label="فتح تفاصيل '+x.title+'"><span>'+x.title+'</span><strong class="factory-summary-amount">'+money(x.value)+' <small>ج.م</small></strong><small class="factory-kpi-note">'+x.note+'</small></button>';
   }
+  /* Action-needed strip on the summary screen. Cards are built by dashboard.js
+     so the rules and the details sheet stay identical on both screens. */
+  function summaryAlerts(){
+    const cards=typeof window.factoryAlertCards==='function'?window.factoryAlertCards():[];
+    if(!cards.length)return '';
+    return '<section class="card factory-summary-alerts" id="factory-summary-alerts">'+
+      '<div class="factory-panel-head"><b>تنبيهات تحتاج إجراء</b><span>مبنية على تاريخ اليوم · اضغط لعرض التفاصيل</span></div>'+
+      '<div class="dash-alerts">'+cards.join('')+'</div></section>';
+  }
+
   function renderHome(){
-    const data=metricData(),layout=summaryLayout(data),ordered=summaryOrder(data).map(key=>data[key]).filter(Boolean),top=ordered.filter(x=>layout[x.key]==='top'),bottom=ordered.filter(x=>layout[x.key]==='bottom');
-    const recent=[
-      ...(S.docs||[]).map(d=>{const total=Number(d.total)||0,remaining=typeof remOf==='function'?Math.max(0,Number(remOf(d))||0):total,status=(d.t==='sret'||d.t==='pret')?'مرحّل':remaining<=.005?'مسددة':remaining<total-.005?'مسددة جزئياً':'غير مسددة';return {ts:d.ts||new Date((d.date||td())+'T12:00:00').getTime(),date:d.date||td(),type:TN[d.t]||'فاتورة',ref:d.no,party:pn(d.pid),amount:total,status,statusClass:status==='مسددة'?'':'gray',source:'doc',id:d.id};}),
-      ...(S.vch||[]).map(v=>{const posted=(S.L||[]).some(l=>String(l.rid)===String(v.id)&&l.src==='vch');return {ts:v.ts||new Date((v.date||td())+'T12:00:00').getTime(),date:v.date||td(),type:v.title||(v.dir==='in'?'سند قبض':'سند دفع'),ref:v.no,party:v.who||pn(v.pid),amount:Number(v.total)||0,status:posted?'مرحّل':'غير مرحّل',statusClass:posted?'':'gray',source:'vch',id:v.id};}),
-      ...(S.po||[]).map(o=>({ts:o.ts||new Date((o.date||td())+'T12:00:00').getTime(),date:o.date||td(),type:'أمر إنتاج',ref:o.no,party:pnm(o),amount:null,status:Number(o.st)===2?'مكتمل':Number(o.st)===1?'قيد التنفيذ':'جديد',statusClass:Number(o.st)===2?'':'gray',source:'po',id:o.id})),
-      ...(S.je||[]).filter(j=>j.id).map(j=>{const rows=(S.L||[]).filter(l=>String(l.rid)===String(j.id)),debit=rows.reduce((n,l)=>n+(Number(l.dr)||0),0),credit=rows.reduce((n,l)=>n+(Number(l.cr)||0),0);return {ts:j.ts||new Date((j.date||td())+'T12:00:00').getTime(),date:j.date||td(),type:'قيد يومية',ref:j.no,party:'',amount:debit,status:Math.abs(debit-credit)<.005?'متوازن':'غير متوازن',statusClass:Math.abs(debit-credit)<.005?'':'gray',source:'je',id:j.id};})
-    ].sort((a,b)=>b.ts-a.ts).slice(0,6);
+    const data=metricData(),layout=summaryLayout(data),ordered=summaryOrder(data).map(key=>data[key]).filter(Boolean);
+    const top=ordered.filter(x=>layout[x.key]==='top'),bottom=ordered.filter(x=>layout[x.key]==='bottom');
     const from=dfm(S.per?.from||''),to=dfm(S.per?.to||td());
-    const recentTable='<div class="factory-table-scroll factory-summary-table-scroll"><table class="l factory-summary-mini-table"><thead><tr><th>التاريخ</th><th>النوع</th><th>المرجع</th><th>الطرف</th><th>المبلغ</th><th>الحالة</th></tr></thead><tbody>'+(recent.length?recent.map(d=>'<tr class="factory-summary-recent-row" role="button" data-open-source="'+d.source+'" data-open-id="'+esc(d.id)+'" tabindex="0"><td>'+esc(dfm(d.date))+'</td><td>'+esc(d.type)+'</td><td dir="ltr">'+esc(d.ref||'')+'</td><td>'+esc(d.party||'—')+'</td><td class="factory-summary-amount" dir="ltr">'+(d.amount===null?'—':money(d.amount)+' ج.م')+'</td><td><span class="factory-chip '+(d.statusClass||'')+'">'+esc(d.status)+'</span></td></tr>').join(''):'<tr><td colspan="6" class="factory-summary-empty">لا توجد حركات مسجلة</td></tr>')+'</tbody></table></div>';
     return ph('الملخص','<button class="g" type="button" id="factory-summary-hide" aria-pressed="'+uiPrefs.hideNumbers+'">'+(uiPrefs.hideNumbers?'إظهار الأرقام':'إخفاء الأرقام')+'</button>')+
-      '<section class="card home-period-card factory-summary-period"><div class="home-period-heading"><span>الفترة الحالية: '+from+' إلى '+to+'</span><button type="button" class="g home-period-toggle" aria-expanded="false" onclick="toggleHomePeriod(this)">تحديد الفترة</button></div><div class="home-period-fields" hidden><div><label>من تاريخ</label><input type="date" value="'+esc(S.per?.from||'')+'" data-home-period-field="from"></div><div><label>إلى تاريخ</label><input type="date" value="'+esc(S.per?.to||td())+'" data-home-period-field="to"></div></div></section>'+
-      '<section class="factory-kpis '+(uiPrefs.hideNumbers?'factory-hide-numbers':'')+'" id="factory-summary-kpis">'+(top.length?top.map(summaryCard).join(''):'<div class="factory-summary-empty">لم تختر مؤشرات للعرض في الأعلى</div>')+'</section>'+
-      '<section class="factory-summary-panels"><div class="card factory-summary-recent '+(uiPrefs.hideNumbers?'factory-hide-numbers':'')+'"><div class="factory-panel-head"><b>أحدث الحركات</b><span>الأحدث أولاً · من سجلات الشركة الحالية</span></div>'+recentTable+'</div><div class="card factory-summary-balances"><div class="factory-panel-head"><b>الأرصدة المهمة</b><span>ج.م</span></div><div id="factory-summary-balances">'+(bottom.length?bottom.map(x=>'<button type="button" class="factory-balance-row" data-summary-screen="'+x.screen+'" data-summary-key="'+x.key+'"><span>'+x.title+'<small>'+x.note+'</small></span><strong class="factory-summary-amount">'+money(x.value)+' ج.م</strong></button>').join(''):'<div class="factory-summary-empty">لم تختر أرصدة للعرض هنا</div>')+'</div></div></section>';
+      summaryPeriodCard(from,to)+
+      summaryBodyHtml(summaryBlocks(data,top,bottom,from,to));
+  }
+  /** The period card owns the date inputs, so it is never rebuilt in place. */
+  function summaryPeriodCard(from,to){
+    return '<section class="card home-period-card factory-summary-period"><div class="home-period-heading"><span>الفترة الحالية: '+from+' إلى '+to+'</span><button type="button" class="g home-period-toggle" aria-expanded="false" onclick="toggleHomePeriod(this)">تحديد الفترة</button></div><div class="home-period-fields" hidden><div><label>من تاريخ</label><input type="date" value="'+esc(S.per?.from||'')+'" data-home-period-field="from"></div><div><label>إلى تاريخ</label><input type="date" value="'+esc(S.per?.to||td())+'" data-home-period-field="to"></div></div></section>';
+  }
+  function summaryRecentTable(){
+  const recent=[
+    ...(S.docs||[]).map(d=>{const total=Number(d.total)||0,remaining=typeof remOf==='function'?Math.max(0,Number(remOf(d))||0):total,status=(d.t==='sret'||d.t==='pret')?'مرحّل':remaining<=.005?'مسددة':remaining<total-.005?'مسددة جزئياً':'غير مسددة';return {ts:d.ts||new Date((d.date||td())+'T12:00:00').getTime(),date:d.date||td(),type:TN[d.t]||'فاتورة',ref:d.no,party:pn(d.pid),amount:total,status,statusClass:status==='مسددة'?'':'gray',source:'doc',id:d.id};}),
+    ...(S.vch||[]).map(v=>{const posted=(S.je||[]).some(j=>j.src==='payment'&&String(j.sourceId)===String(v.id));return {ts:v.ts||new Date((v.date||td())+'T12:00:00').getTime(),date:v.date||td(),type:v.title||(v.dir==='in'?'سند قبض':'سند دفع'),ref:v.no,party:v.who||pn(v.pid),amount:Number(v.total)||0,status:posted?'مرحّل':'غير مرحّل',statusClass:posted?'':'gray',source:'vch',id:v.id};}),
+    ...(S.po||[]).map(o=>({ts:o.ts||new Date((o.date||td())+'T12:00:00').getTime(),date:o.date||td(),type:'أمر إنتاج',ref:o.no,party:pnm(o),amount:null,status:Number(o.st)===2?'مكتمل':Number(o.st)===1?'قيد التنفيذ':'جديد',statusClass:Number(o.st)===2?'':'gray',source:'po',id:o.id})),
+    // An auto-generated entry (invoice, voucher, work order) is already listed
+    // as the document that created it; showing both looked like duplicates.
+    ...(S.je||[]).filter(j=>j.id&&!['invoice','invoice_return','payment','work_order','invoice_void'].includes(j.src)).map(j=>{const rows=(S.L||[]).filter(l=>String(l.rid)===String(j.id)),debit=rows.reduce((n,l)=>n+(Number(l.dr)||0),0),credit=rows.reduce((n,l)=>n+(Number(l.cr)||0),0);return {ts:j.ts||new Date((j.date||td())+'T12:00:00').getTime(),date:j.date||td(),type:'قيد يومية',ref:j.no,party:'',amount:debit,status:Math.abs(debit-credit)<.005?'متوازن':'غير متوازن',statusClass:Math.abs(debit-credit)<.005?'':'gray',source:'je',id:j.id};})
+  ].sort((a,b)=>b.ts-a.ts).slice(0,6);
+  const from=dfm(S.per?.from||''),to=dfm(S.per?.to||td());
+    return '<div class="factory-table-scroll factory-summary-table-scroll"><table class="l factory-summary-mini-table"><thead><tr><th>التاريخ</th><th>النوع</th><th>المرجع</th><th>الطرف</th><th>المبلغ</th><th>الحالة</th></tr></thead><tbody>'+(recent.length?recent.map(d=>'<tr class="factory-summary-recent-row" role="button" data-open-source="'+d.source+'" data-open-id="'+esc(d.id)+'" tabindex="0"><td>'+esc(dfm(d.date))+'</td><td>'+esc(d.type)+'</td><td dir="ltr">'+esc(d.ref||'')+'</td><td>'+esc(d.party||'—')+'</td><td class="factory-summary-amount" dir="ltr">'+(d.amount===null?'—':money(d.amount)+' ج.م')+'</td><td><span class="factory-chip '+(d.statusClass||'')+'">'+esc(d.status)+'</span></td></tr>').join(''):'<tr><td colspan="6" class="factory-summary-empty">لا توجد حركات مسجلة</td></tr>')+'</tbody></table></div>';
+  }
+  /** The summary blocks keyed by section id, ready for ordering. */
+  function summaryBlocks(data,top,bottom,from,to){
+    const recentTable=summaryRecentTable();
+    const kpisHtml='<section class="factory-kpis '+(uiPrefs.hideNumbers?'factory-hide-numbers':'')+'" id="factory-summary-kpis">'+(top.length?top.map(summaryCard).join(''):'<div class="factory-summary-empty">لم تختر مؤشرات للعرض في الأعلى</div>')+'</section>';
+    const recentHtml='<div class="card factory-summary-recent '+(uiPrefs.hideNumbers?'factory-hide-numbers':'')+'"><div class="factory-panel-head"><b>أحدث الحركات</b><span>الأحدث أولاً · من سجلات الشركة الحالية</span></div>'+recentTable+'</div>';
+    const balancesHtml='<div class="card factory-summary-balances"><div class="factory-panel-head"><b>الأرصدة المهمة</b><span>ج.م</span></div><div id="factory-summary-balances">'+(bottom.length?bottom.map(x=>'<button type="button" class="factory-balance-row" data-summary-screen="'+x.screen+'" data-summary-key="'+x.key+'"><span>'+x.title+'<small>'+x.note+'</small></span><strong class="factory-summary-amount">'+money(x.value)+' ج.م</strong></button>').join(''):'<div class="factory-summary-empty">لم تختر أرصدة للعرض هنا</div>')+'</div></div>';
+    return {kpis:kpisHtml,recent:recentHtml,balances:balancesHtml,alerts:summaryAlerts()};
+  }
+  /* Blocks below the period card. Kept separate so a period change can refresh
+     the figures in place: re-rendering the whole screen would throw away the
+     date inputs the user is still typing into. */
+  function summaryBodyHtml(blocks){
+    const sectionKeys=summarySectionOrder().filter(key=>!summarySectionHidden(key)&&blocks[key]);
+    // Alerts belong under the balances they describe, so while they sit right
+    // after that card they share its column instead of starting a new row.
+    const alertsUnderBalances=blocks.alerts&&sectionKeys.indexOf('alerts')===sectionKeys.indexOf('balances')+1;
+    let body='',pending=[];
+    const flush=()=>{if(!pending.length)return;body+='<section class="factory-summary-panels">'+pending.join('')+'</section>';pending=[];};
+    sectionKeys.forEach(key=>{
+      if(key==='alerts'&&alertsUnderBalances)return;
+      if(key==='recent'||key==='balances'){
+        pending.push(key==='balances'&&alertsUnderBalances
+          ?'<div class="factory-summary-balance-col">'+blocks.balances+blocks.alerts+'</div>'
+          :blocks[key]);
+        return;
+      }
+      flush();body+=blocks[key];
+    });
+    flush();
+    return body;
   }
   function accountTreeIds(id,seen){seen=seen||new Set();const key=String(id);if(seen.has(key))return[];seen.add(key);return [id,...childrenOf(id).flatMap(a=>accountTreeIds(a.id,seen))];}
   function openFinancialLedger(ids,title,from,to){
@@ -145,42 +250,59 @@
   }
   let savedFinPeriod={};try{savedFinPeriod=JSON.parse(localStorage.getItem('ms-factory-financial-period-v1')||'{}')||{};}catch(_){}
   let fsState={from:savedFinPeriod.from||S.per?.from||td().slice(0,8)+'01',to:savedFinPeriod.to||S.per?.to||td(),kind:savedFinPeriod.kind||'income'};
-  function renderFinancialStatements(){
+  /** Statement body only. Kept separate so the period inputs never remount. */
+  function financialBodyHtml(){
     const from=fsState.from||'',to=fsState.to||td(),income=totalType('I',from,to),expenses=totalType('X',from,to),profit=income-expenses;
     const assets=totalType('A','',to),liabilities=totalType('L','',to),equityAccounts=totalType('Q','',to),retained=totalType('I','',to)-totalType('X','',to),equity=equityAccounts+retained,delta=assets-liabilities-equity;
+    const tabs='<div class="factory-fin-tabs"><button type="button" data-fs-kind="income" class="'+(fsState.kind==='income'?'active':'')+'">قائمة الدخل</button><button type="button" data-fs-kind="balance" class="'+(fsState.kind==='balance'?'active':'')+'">قائمة المركز المالي</button></div>';
+    if(fsState.kind!=='income'){
+      return tabs+'<div class="factory-fin-heading"><h3>قائمة المركز المالي</h3><span>كما في '+dfm(to)+'</span></div><div class="factory-fin-grid">'+statementGroup('A','الأصول','',to)+statementGroup('L','الالتزامات','',to)+statementGroup('Q','حقوق الملكية','',to)+'</div><div class="factory-fin-equity-note"><span>نتيجة الأعمال المتراكمة حتى التاريخ المحدد</span><b>'+money(retained)+' ج.م</b></div><div class="factory-fin-result"><span>إجمالي الالتزامات وحقوق الملكية شامل نتيجة الأعمال</span><strong>'+money(liabilities+equity)+' ج.م</strong></div><div class="factory-fin-check '+(Math.abs(delta)<.02?'balanced':'unbalanced')+'"><span>فرق التوازن (الأصول − الالتزامات وحقوق الملكية)</span><b>'+money(delta)+' ج.م</b></div>';
+    }
+    return tabs+'<div class="factory-fin-heading"><h3>قائمة الدخل</h3><span>من '+dfm(from)+' إلى '+dfm(to)+'</span></div><div class="factory-fin-grid">'+statementGroup('I','الإيرادات',from,to)+statementGroup('X','المصروفات',from,to)+'</div><div class="factory-fin-result"><span>صافي الربح / الخسارة</span><button type="button" class="factory-fin-amount" data-fin-profit="1" data-fin-from="'+esc(from)+'" data-fin-to="'+esc(to)+'">'+money(profit)+' ج.م</button></div>';
+  }
+  function renderFinancialStatements(){
+    const from=fsState.from||'',to=fsState.to||td();
     return ph('القوائم المالية','<button class="g" type="button" onclick="go(\'rep\');R.rep=\'tb\';render()">ميزان المراجعة</button>')+
       '<div class="factory-fin-filters"><label>من تاريخ<input id="factory-fs-from" type="date" value="'+esc(from)+'" max="'+esc(to)+'"></label><label>إلى تاريخ<input id="factory-fs-to" type="date" value="'+esc(to)+'" min="'+esc(from)+'"></label><button type="button" data-fs-apply>تطبيق الفترة</button><span class="factory-auto-period-note">تتحدث القوائم تلقائيًا بعد اكتمال اختيار التاريخين</span></div>'+
-      '<div class="factory-fin-tabs"><button type="button" data-fs-kind="income" class="'+(fsState.kind==='income'?'active':'')+'">قائمة الدخل</button><button type="button" data-fs-kind="balance" class="'+(fsState.kind==='balance'?'active':'')+'">قائمة المركز المالي</button></div>'+
-      (fsState.kind==='income'?'<div class="factory-fin-heading"><h3>قائمة الدخل</h3><span>من '+dfm(from)+' إلى '+dfm(to)+'</span></div><div class="factory-fin-grid">'+statementGroup('I','الإيرادات',from,to)+statementGroup('X','المصروفات',from,to)+'</div><div class="factory-fin-result"><span>صافي الربح / الخسارة</span><button type="button" class="factory-fin-amount" data-fin-profit="1" data-fin-from="'+esc(from)+'" data-fin-to="'+esc(to)+'">'+money(profit)+' ج.م</button></div>':
-      '<div class="factory-fin-heading"><h3>قائمة المركز المالي</h3><span>كما في '+dfm(to)+'</span></div><div class="factory-fin-grid">'+statementGroup('A','الأصول','',to)+statementGroup('L','الالتزامات','',to)+statementGroup('Q','حقوق الملكية','',to)+'</div><div class="factory-fin-equity-note"><span>نتيجة الأعمال المتراكمة حتى التاريخ المحدد</span><b>'+money(retained)+' ج.م</b></div><div class="factory-fin-result"><span>إجمالي الالتزامات وحقوق الملكية شامل نتيجة الأعمال</span><strong>'+money(liabilities+equity)+' ج.م</strong></div><div class="factory-fin-check '+(Math.abs(delta)<.02?'balanced':'unbalanced')+'"><span>فرق التوازن (الأصول − الالتزامات وحقوق الملكية)</span><b>'+money(delta)+' ج.م</b></div>');
+      '<div id="factory-fin-body">'+financialBodyHtml()+'</div>';
   }
   function setFinancialKind(kind){fsState.kind=kind;render();}
-  function applyFinancialPeriod(from,to){
+  function applyFinancialPeriod(from,to,options){
     from=String(from||'');to=String(to||'');
     if(from&&to&&from>to){toast('تاريخ البداية يجب ألا يتجاوز تاريخ النهاية');return false;}
     fsState.from=from;fsState.to=to;
     try{localStorage.setItem('ms-factory-financial-period-v1',JSON.stringify({from,to,kind:fsState.kind||'income'}));}catch(_){}
+    if(options&&options.partial)refreshFinancialBody();
     return true;
+  }
+  /** Replace the statement body only, leaving the date inputs mounted. */
+  function refreshFinancialBody(){
+    const body=document.getElementById('factory-fin-body');
+    if(!body){render();return;}
+    body.innerHTML=financialBodyHtml();
+    if(LANGEN)trTree(body);
   }
   function refreshSummarySettings(){
     const data=metricData(),layout=summaryLayout(data);
     document.querySelectorAll('#m [data-summary-place]').forEach(s=>s.value=layout[s.dataset.summaryPlace]||'hidden');
   }
+  // Ordered by how often each screen is opened during a normal working day:
+  // selling first, then collecting/paying, then stock, then the books.
   const referenceGroups=[
+    {key:'dash',title:'لوحة المعلومات',ids:['dash'],icon:'dashboard'},
     {key:'home',title:'الملخص',ids:['home'],icon:'home'},
-    {key:'bank',title:'الحسابات النقدية والبنوك',ids:['bank'],icon:'bank'},
-    {key:'partners',title:'العملاء والموردون',ids:['cust','supp'],icon:'customer'},
-    {key:'vouchers',title:'المقبوضات والمدفوعات',ids:['rc','py'],icon:'receipt'},
     {key:'invoices',title:'الفواتير والمرتجعات',ids:['sale','sret','pur','pret'],icon:'sale'},
+    {key:'vouchers',title:'المقبوضات والمدفوعات',ids:['rc','py'],icon:'receipt'},
+    {key:'partners',title:'العملاء والموردون',ids:['cust','supp'],icon:'customer'},
+    {key:'bank',title:'الحسابات النقدية والبنوك',ids:['bank'],icon:'bank'},
     {key:'inventory',title:'الأصناف والمخازن',ids:['stock'],icon:'inventory'},
     {key:'production',title:'أوامر الإنتاج',ids:['prod'],icon:'production'},
-    {key:'accounts',title:'شجرة الحسابات والميزان',ids:['coa'],icon:'coa'},
     {key:'reports',title:'التقارير',ids:['rep'],icon:'report'},
     {key:'statements',title:'القوائم المالية',ids:['statements'],icon:'report'},
     {key:'journal',title:'قيود اليومية',ids:['je'],icon:'journal'},
     {key:'employees',title:'الموظفون والصلاحيات',ids:['emp'],icon:'employee'},
-    {key:'assistant',title:'مساعد بيانات الشركة',ids:['ai'],icon:'ai'},
     {key:'timeline',title:'السجل الزمني',ids:['tl'],icon:'timeline'},
+    {key:'assistant',title:'مساعد العمل',ids:['ai'],icon:'ai'},
     {key:'settings',title:'الإعدادات',ids:['set'],icon:'settings'}
   ];
   let originalScreens={},referenceTabsInstalled=false;
@@ -241,20 +363,25 @@
     const rows=(S.vch||[]).filter(v=>
       v.dir===dir&&(!query||factorySearchMatch(referenceVoucherSearchText(v),query))&&
       (!fv(key,"ac")||voucherAccounts(v).some(x=>String(x.a)===String(fv(key,"ac"))))&&
-      (!fv(key,"from")||date(v)>=fv(key,"from"))&&(!fv(key,"to")||date(v)<=fv(key,"to"))
+      (!fv(key,"from")||date(v)>=fv(key,"from"))&&(!fv(key,"to")||date(v)<=fv(key,"to"))&&
+      (!fv(key,"amt1")||(Number(v.total)||0)>=Number(fv(key,"amt1")))&&
+      (!fv(key,"amt2")||(Number(v.total)||0)<=Number(fv(key,"amt2")))&&
+      (!fv(key,"linked")||(fv(key,"linked")==="yes"?Object.keys(v.alloc||{}).length>0:Object.keys(v.alloc||{}).length===0))
     ).sort((a,b)=>date(b).localeCompare(date(a))||(Number(b.ts)||0)-(Number(a.ts)||0));
     const accounts=(S.accts||[]).filter(a=>a.cash);
     const filters=[["q","text","المرجع أو الحساب أو الطرف"],["ac","sel",incoming?"حساب القبض":"حساب الدفع",[["","كل الحسابات"],...accounts.map(a=>[String(a.id),an(a.id)+" ("+cur_(a)+")"])]],["from","date","من تاريخ"],["to","date","إلى تاريخ"]];
+    filters.push(["amt1","num","من مبلغ",null,false,1],["amt2","num","إلى مبلغ",null,false,1]);
+    filters.push(["linked","sel","ربط الفواتير",[["","الكل"],["yes","مرتبط بفاتورة"],["no","غير مرتبط"]],false,1]);
     const data=rows.length?rows.map(v=>{
       const accountNames=voucherAccounts(v).map(x=>an(x.a)+(x.fc?" ("+f(x.fc)+" "+(x.cur||cur_(x.a))+")":"")).filter(Boolean).join("، ")||"—";
       const party=v.who||pn(v.pid)||"—",searchText=referenceVoucherSearchText(v);
-      return "<tr data-factory-search-text=\""+esc(searchText)+"\"><td>"+esc(dfm(refDateValue(v)))+"</td><td dir=\"ltr\">"+esc(v.no||"—")+"</td><td>"+esc(accountNames)+"</td><td>"+esc(party)+"</td><td>"+esc(v.desc||"—")+"</td><td><div class=\"factory-reference-amount-actions\"><strong class=\"factory-reference-amount\" dir=\"ltr\">"+f(v.total)+"</strong><small>ج.م</small>"+refVoucherActions(v)+"</div></td></tr>";
-    }).join(""):"<tr><td colspan=\"6\" class=\"mu factory-reference-empty-cell\">لا توجد سندات مطابقة في الفترة المحددة</td></tr>";
+      return "<tr data-factory-search-text=\""+esc(searchText)+"\"><td>"+esc(dfm(refDateValue(v)))+"</td><td dir=\"ltr\">"+esc(v.no||"—")+"</td><td>"+esc(accountNames)+"</td><td>"+esc(party)+"</td><td>"+esc(v.desc||"—")+"</td><td><strong class=\"factory-reference-amount\" dir=\"ltr\">"+f(v.total)+"</strong> <small>ج.م</small></td><td class=\"factory-reference-actions-cell\">"+refVoucherActions(v)+"</td></tr>";
+    }).join(""):"<tr><td colspan=\"7\" class=\"mu factory-reference-empty-cell\">لا توجد سندات مطابقة في الفترة المحددة</td></tr>";
     const actions=can("edit")?"<button type=\"button\" class=\"new\" onclick=\"vForm(&#39;in&#39;)\">＋ سند قبض</button><button type=\"button\" class=\"g\" onclick=\"vForm(&#39;out&#39;)\">＋ سند دفع</button>":"";
     const title=incoming?"سندات القبض":"سندات الدفع";
     return ph("المقبوضات والمدفوعات",actions)+refFilterRow(key,filters)+
       "<section class=\"card factory-reference-table-card\"><div class=\"factory-reference-table-head\"><b>"+title+"</b><span>مرتبة من الأحدث إلى الأقدم</span></div>"+
-      "<div class=\"factory-table-scroll\"><table class=\"l factory-reference-data-table\"><thead><tr><th>التاريخ</th><th>المرجع</th><th>حساب "+(incoming?"القبض":"الدفع")+"</th><th>"+(incoming?"العميل":"المورد")+"</th><th>البيان</th><th>المبلغ</th></tr></thead><tbody>"+data+"</tbody></table></div></section>";
+      "<div class=\"factory-table-scroll\"><table class=\"l factory-reference-data-table\"><thead><tr><th>التاريخ</th><th>المرجع</th><th>حساب "+(incoming?"القبض":"الدفع")+"</th><th>"+(incoming?"العميل":"المورد")+"</th><th>البيان</th><th>المبلغ</th><th>الإجراءات</th></tr></thead><tbody>"+data+"</tbody></table></div></section>";
   }
   function refOriginalInvoiceCell(row){
     const id=row.originalId||row.originalDocId||row.baseDocId||'';
@@ -284,11 +411,22 @@
     const filters=[["q","text","رقم الفاتورة أو العميل أو الصنف"],["cat","sel","التبويب",[["all","كل الأنواع"],["mfg","تصنيع"],["sup","مشتريات"]]]];
     if(isPay)filters.push(["st","sel","حالة السداد",[["","كل الحالات"],["مسددة","مسددة"],["مسددة جزئيًا","مسددة جزئيًا"],["غير مسددة","غير مسددة"]]]);
     filters.push(["from","date","من تاريخ"],["to","date","إلى تاريخ"]);
+    // Secondary filters an accountant reaches for less often. They stay folded
+    // away so the default bar stays short on a phone.
+    filters.push(["amt1","num","من مبلغ",null,false,1],["amt2","num","إلى مبلغ",null,false,1]);
+    filters.push(["cur","sel","العملة",[["","كل العملات"],...(S.curs||[]).map(c=>[c,c])],false,1]);
+    filters.push(["pay","sel","حالة المرتجع",[["","الكل"],["posted","مرحّل"],["unposted","غير مرحّل"]],false,1]);
+    const currencyOf=row=>{const account=(S.accts||[]).find(a=>String(a.id)===String(row.ac));return account?cur_(account):"EGP";};
+    const postedOf=row=>(S.L||[]).some(l=>l.src==="doc"&&String(l.rid)===String(row.id))||!!row.manager_read_only;
     const rows=(S.docs||[]).filter(d=>
       d.t===type&&(!query||factorySearchMatch(referenceInvoiceSearchText(d),query))&&
       (!fv(key,"cat")||fv(key,"cat")==="all"||d.cat===fv(key,"cat"))&&
       (!fv(key,"st")||stOf(d)===fv(key,"st"))&&
-      (!fv(key,"from")||date(d)>=fv(key,"from"))&&(!fv(key,"to")||date(d)<=fv(key,"to"))
+      (!fv(key,"from")||date(d)>=fv(key,"from"))&&(!fv(key,"to")||date(d)<=fv(key,"to"))&&
+      (!fv(key,"amt1")||(Number(d.total)||0)>=Number(fv(key,"amt1")))&&
+      (!fv(key,"amt2")||(Number(d.total)||0)<=Number(fv(key,"amt2")))&&
+      (!fv(key,"cur")||currencyOf(d)===fv(key,"cur"))&&
+      (!fv(key,"pay")||(fv(key,"pay")==="posted"?postedOf(d):!postedOf(d)))
     ).sort((a,b)=>date(b).localeCompare(date(a))||(Number(b.ts)||0)-(Number(a.ts)||0));
     const title=type==="sale"?"فواتير البيع":type==="sret"?"مرتجعات البيع":type==="pur"?"فواتير الشراء":"مرتجعات الشراء";
     const data=rows.length?rows.map(row=>{
@@ -299,18 +437,18 @@
       const statusClass=status==="مسددة"?"paid":status==="مسددة جزئيًا"?"partial":status==="غير مسددة"?"unpaid":posted||row.manager_read_only?"posted":"unposted";
       const actions=refInvoiceActions(row,type);
       if(isReturn){
-        return "<tr data-factory-search-text=\""+esc(searchText)+"\"><td>"+esc(dfm(refDateValue(row)))+"</td><td dir=\"ltr\">"+esc(row.no||"—")+"</td><td dir=\"ltr\">"+refOriginalInvoiceCell(row)+"</td><td>"+esc(party)+"</td><td class=\"factory-reference-amount\" dir=\"ltr\">"+f(total)+" <small>ج.م</small></td><td><div class=\"factory-reference-status-actions\"><span class=\"factory-reference-status "+statusClass+"\">"+esc(statusLabel)+"</span>"+actions+"</div></td></tr>";
+        return "<tr data-factory-search-text=\""+esc(searchText)+"\"><td>"+esc(dfm(refDateValue(row)))+"</td><td dir=\"ltr\">"+esc(row.no||"—")+"</td><td dir=\"ltr\">"+refOriginalInvoiceCell(row)+"</td><td>"+esc(party)+"</td><td class=\"factory-reference-amount\" dir=\"ltr\">"+f(total)+" <small>ج.م</small></td><td class=\"factory-reference-status-cell\"><span class=\"factory-reference-status "+statusClass+"\">"+esc(statusLabel)+"</span></td><td class=\"factory-reference-actions-cell\">"+actions+"</td></tr>";
       }
       const paid=paidOf(row),remaining=remOf(row);
       if(isSaleInvoice){
-        return "<tr data-factory-search-text=\""+esc(searchText)+"\"><td>"+esc(dfm(refDateValue(row)))+"</td><td dir=\"ltr\">"+esc(row.no||"—")+"</td><td>"+esc(party)+"</td><td class=\"factory-reference-count\">"+(row.lines||[]).length+"</td><td class=\"factory-reference-amount\" dir=\"ltr\">"+f(total)+"</td><td class=\"factory-reference-amount\" dir=\"ltr\">"+(paid>.005?f(paid):"—")+"</td><td class=\"factory-reference-amount\" dir=\"ltr\">"+f(remaining)+"</td><td><div class=\"factory-reference-status-actions\"><span class=\"factory-reference-status "+statusClass+"\">"+esc(statusLabel)+"</span>"+actions+"</div></td></tr>";
+        return "<tr data-factory-search-text=\""+esc(searchText)+"\"><td>"+esc(dfm(refDateValue(row)))+"</td><td dir=\"ltr\">"+esc(row.no||"—")+"</td><td>"+esc(party)+"</td><td class=\"factory-reference-count\">"+(row.lines||[]).length+"</td><td class=\"factory-reference-amount\" dir=\"ltr\">"+f(total)+"</td><td class=\"factory-reference-amount\" dir=\"ltr\">"+(paid>.005?f(paid):"—")+"</td><td class=\"factory-reference-amount\" dir=\"ltr\">"+f(remaining)+"</td><td class=\"factory-reference-status-cell\"><span class=\"factory-reference-status "+statusClass+"\">"+esc(statusLabel)+"</span></td><td class=\"factory-reference-actions-cell\">"+actions+"</td></tr>";
       }
-      return "<tr data-factory-search-text=\""+esc(searchText)+"\"><td>"+esc(dfm(refDateValue(row)))+"</td><td dir=\"ltr\">"+esc(row.no||"—")+"</td><td>"+esc(party)+"</td><td class=\"factory-reference-count\">"+(row.lines||[]).length+"</td><td class=\"factory-reference-amount\" dir=\"ltr\">"+f(total)+"</td><td class=\"factory-reference-amount\" dir=\"ltr\">"+(paid>.005?f(paid):"—")+"</td><td><div class=\"factory-reference-amount-actions\"><strong>"+f(remaining)+"</strong><small>ج.م</small>"+actions+"</div></td></tr>";
-    }).join(""):"<tr><td colspan=\""+(isReturn?6:isSaleInvoice?8:7)+"\" class=\"mu factory-reference-empty-cell\">لا توجد مستندات مطابقة في الفترة المحددة</td></tr>";
+      return "<tr data-factory-search-text=\""+esc(searchText)+"\"><td>"+esc(dfm(refDateValue(row)))+"</td><td dir=\"ltr\">"+esc(row.no||"—")+"</td><td>"+esc(party)+"</td><td class=\"factory-reference-count\">"+(row.lines||[]).length+"</td><td class=\"factory-reference-amount\" dir=\"ltr\">"+f(total)+"</td><td class=\"factory-reference-amount\" dir=\"ltr\">"+(paid>.005?f(paid):"—")+"</td><td class=\"factory-reference-amount\" dir=\"ltr\"><strong>"+f(remaining)+"</strong> <small>ج.م</small></td><td class=\"factory-reference-actions-cell\">"+actions+"</td></tr>";
+    }).join(""):"<tr><td colspan=\""+(isReturn?7:isSaleInvoice?9:8)+"\" class=\"mu factory-reference-empty-cell\">لا توجد مستندات مطابقة في الفترة المحددة</td></tr>";
     const headingAction=can("edit")?"<button type=\"button\" class=\"new\" onclick=\"docForm(&#39;"+type+"&#39;)\">＋ مستند جديد</button>":"";
     const headers=isReturn?
-      "<th>التاريخ</th><th>المرجع</th><th>الفاتورة الأصلية</th><th>"+(isSale?"العميل":"المورد")+"</th><th>الصافي بعد الخصم</th><th>الحالة</th>":
-      "<th>التاريخ</th><th>المرجع</th><th>"+(isSale?"العميل":"المورد")+"</th><th>عدد الأصناف</th><th>الإجمالي</th><th>المدفوع</th><th>المتبقي</th>"+(isSaleInvoice?"<th>الحالة</th>":"");
+      "<th>التاريخ</th><th>المرجع</th><th>الفاتورة الأصلية</th><th>"+(isSale?"العميل":"المورد")+"</th><th>الصافي بعد الخصم</th><th>الحالة</th><th>الإجراءات</th>":
+      "<th>التاريخ</th><th>المرجع</th><th>"+(isSale?"العميل":"المورد")+"</th><th>عدد الأصناف</th><th>الإجمالي</th><th>المدفوع</th><th>المتبقي</th>"+(isSaleInvoice?"<th>الحالة</th>":"")+"<th>الإجراءات</th>";
     return ph("الفواتير والمرتجعات",headingAction)+refFilterRow(key,filters)+
       "<section class=\"card factory-reference-table-card\"><div class=\"factory-reference-table-head\"><b>"+title+"</b><span>"+(isReturn?(type==="sret"?"المرجع بالفاتورة الأصلية":"مرتبطة بفاتورة الشراء الأصلية"):"آخر فاتورة أولاً")+"</span></div>"+
       "<div class=\"factory-table-scroll\"><table class=\"l factory-reference-data-table\"><thead><tr>"+headers+"</tr></thead><tbody>"+data+"</tbody></table></div></section>";
@@ -358,11 +496,11 @@
       home:'الملخص',bank:'الحسابات النقدية والبنوك',cust:'العملاء والموردون',supp:'العملاء والموردون',
       rc:'المقبوضات والمدفوعات',py:'المقبوضات والمدفوعات',
       sale:'الفواتير والمرتجعات',sret:'الفواتير والمرتجعات',pur:'الفواتير والمرتجعات',pret:'الفواتير والمرتجعات',
-      stock:'الأصناف والمخازن',prod:'أوامر الإنتاج',coa:'شجرة الحسابات والميزان',rep:'التقارير',
-      statements:'القوائم المالية',je:'قيود اليومية',emp:'الموظفون والصلاحيات',ai:'مساعد بيانات الشركة',tl:'السجل الزمني',set:'الإعدادات'
+      stock:'الأصناف والمخازن',prod:'أوامر الإنتاج',coa:'شجرة الحسابات',rep:'التقارير',
+      statements:'القوائم المالية',je:'قيود اليومية',emp:'الموظفون والصلاحيات',ai:'مساعد العمل',tl:'السجل الزمني',set:'الإعدادات'
     };
     Object.assign(N,labels);
-    Object.assign(EN,{'العملاء والموردون':'Customers and suppliers','المقبوضات والمدفوعات':'Receipts and payments','الفواتير والمرتجعات':'Invoices and returns','الأصناف والمخازن':'Items and warehouses','شجرة الحسابات والميزان':'Chart of accounts and trial balance','الموظفون والصلاحيات':'Employees and permissions','مساعد بيانات الشركة':'Company data assistant'});
+    Object.assign(EN,{'العملاء والموردون':'Customers and suppliers','المقبوضات والمدفوعات':'Receipts and payments','الفواتير والمرتجعات':'Invoices and returns','الأصناف والمخازن':'Items and warehouses','شجرة الحسابات':'Chart of accounts','الموظفون والصلاحيات':'Employees and permissions','مساعد بيانات الشركة':'Company data assistant'});
   }
   function renderReferenceSidebar(){
     const sb=document.getElementById('sb'),scroll=sb?.querySelector('.sb-nav-scroll');
@@ -372,7 +510,10 @@
     const current=CUR?.kind==='screen'?CUR.sid:tab;
     const fragment=document.createDocumentFragment();
     referenceGroups.forEach(group=>{
-      const ids=group.ids.filter(id=>permitted.has(id));
+      // Hidden screens must disappear from the sidebar too, otherwise the
+      // screen picker would look broken for every grouped screen.
+      const hidden=new Set((typeof S!=='undefined'&&S&&S.hide)||[]);
+      const ids=group.ids.filter(id=>permitted.has(id)&&!hidden.has(id));
       if(!ids.length)return;
       const target=ids.includes(current)?current:ids[0];
       const source=sourceLinks.get(target)||sourceLinks.get(ids[0]);
@@ -419,11 +560,14 @@
   });
   document.addEventListener('change',e=>{
     if(e.target.matches('#factory-fs-from,#factory-fs-to')){
+      // Only the statement body is replaced here. Re-rendering the whole screen
+      // would destroy the date inputs mid-edit, which closed the native picker
+      // before the second date could be chosen.
       const from=document.getElementById('factory-fs-from')?.value||'',to=document.getElementById('factory-fs-to')?.value||'';
       const start=document.getElementById('factory-fs-from'),end=document.getElementById('factory-fs-to');
       if(start)start.max=to||'';
       if(end)end.min=from||'';
-      if(from&&to){if(applyFinancialPeriod(from,to))render();}
+      if(from&&to)applyFinancialPeriod(from,to,{partial:true});
       return;
     }
     const s=e.target.closest('[data-summary-place]');if(s){uiPrefs.summary=uiPrefs.summary||{};uiPrefs.summary[s.dataset.summaryPlace]=s.value;saveUiPrefs();render();return;}

@@ -283,6 +283,7 @@ class JournalOut(ORMModel):
     reference: str
     memo: str
     source_type: str
+    source_id: int | None
     reverses_entry_id: int | None
     reversed_by_entry_id: int | None
     lines: list[JournalLineOut] = []
@@ -439,8 +440,18 @@ class WarehouseCreate(BaseModel):
     name_ar: str = ""
     parent_id: int | None = None
     is_group: bool = False
+    kind: str = ""
     address: str = ""
     notes: str = ""
+
+
+class WarehouseUpdate(BaseModel):
+    name: str | None = Field(default=None, max_length=120)
+    name_ar: str | None = None
+    parent_id: int | None = None
+    kind: str | None = Field(default=None, max_length=20)
+    address: str | None = None
+    notes: str | None = None
 
 
 class WarehouseOut(ORMModel):
@@ -450,6 +461,7 @@ class WarehouseOut(ORMModel):
     name_ar: str
     parent_id: int | None
     is_group: bool
+    kind: str = ""
     is_active: bool
 
 

@@ -10,12 +10,12 @@ function applyFactoryBranding() {
   const nameNode = $('auth-brand-name');
   const logoNode = $('auth-brand-logo');
   if (nameNode) {
-    nameNode.textContent = 'مدير المصنع';
-    document.title = 'مدير المصنع - تسجيل الدخول';
+    nameNode.textContent = 'مدير الشركة';
+    document.title = 'مدير الشركة - تسجيل الدخول';
   }
   if (logoNode) {
-    logoNode.hidden = true;
-    logoNode.removeAttribute('src');
+    logoNode.src = './assets/icon.svg';
+    logoNode.hidden = false;
   }
   try {
     const brand = JSON.parse(localStorage.getItem('factory-branding') || '{}');
@@ -25,10 +25,10 @@ function applyFactoryBranding() {
       document.title = name + ' - تسجيل الدخول';
     }
     const logo = typeof brand.logo === 'string' ? brand.logo : '';
-    if (logoNode && /^data:image\/(?:jpeg|png|webp);base64,/i.test(logo)) {
+    if (logoNode && /^data:image\//i.test(logo)) {
       logoNode.src = logo;
       logoNode.hidden = false;
-      logoNode.onerror = () => { logoNode.hidden = true; logoNode.removeAttribute('src'); };
+      logoNode.onerror = () => { logoNode.src = './assets/icon.svg'; };
     }
   } catch (_) {}
 }
@@ -42,10 +42,24 @@ try { $('auth-email').value = localStorage.getItem('factory-login-name') || ''; 
 
 function say(text, isError = true) {
   if(!msg) return;
-  msg.textContent = text;
-  msg.dataset.kind = isError ? 'error' : 'success';
-  msg.style.display = 'block';
-  
+  const title = msg.querySelector('.auth-note__title');
+  const hint = msg.querySelector('.auth-note__hint');
+  const offline = navigator.onLine === false;
+  msg.className = 'auth-note' + (isError ? (offline ? ' is-warn' : ' is-error') : '');
+  msg.hidden = false;
+  if(title) title.textContent = text; else msg.textContent = text;
+  if(hint) {
+    hint.textContent = offline ? 'لا يوجد اتصال بالإنترنت على هذا الجهاز. أعد الاتصال ثم حاول مرة أخرى.' : '';
+    hint.hidden = !hint.textContent;
+  }
+}
+
+function setStatus(text) {
+  if(!status) return;
+  status.hidden = !text;
+  if(!text) return;
+  const title = status.querySelector('.auth-note__title');
+  if(title) title.textContent = text; else status.textContent = text;
 }
 
 function credentials() {
@@ -58,10 +72,10 @@ function credentials() {
 }
 
 if (!supabase) {
-  if(status) status.textContent = 'إعداد تسجيل الدخول غير متاح';
+  setStatus('إعداد تسجيل الدخول غير متاح');
   say('تعذر تهيئة خدمة تسجيل الدخول. أعد تحميل الصفحة أو تواصل مع المسؤول.');
 } else {
-  if(status) status.textContent = 'جاهز لتسجيل الدخول';
+  setStatus(navigator.onLine === false ? 'لا يوجد اتصال بالإنترنت' : 'جاهز لتسجيل الدخول');
 
   const loginButton = $('auth-login');
   form.addEventListener('submit', (e) => {
@@ -86,7 +100,7 @@ if (!supabase) {
         const detail = String(result.error.message || '').toLowerCase();
         if (detail.includes('invalid login credentials')) return say('اسم المستخدم أو كلمة المرور غير صحيحة.');
         if (detail.includes('email not confirmed')) return say('الحساب غير مؤكد. تواصل مع المسؤول.');
-        return say('تعذر تسجيل الدخول. تحقق من بياناتك واتصال الإنترنت ثم حاول مرة أخرى.');
+        return say(navigator.onLine === false ? 'تعذر تسجيل الدخول' : 'تعذر تسجيل الدخول. تحقق من بياناتك ثم حاول مرة أخرى.');
       }
       say('تم الدخول بنجاح ✅', false);
       location.replace('index.html');

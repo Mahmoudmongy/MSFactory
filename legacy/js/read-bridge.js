@@ -21,7 +21,7 @@
  *   * Ledger rows carry ``src``/``rid`` so the screens can link a row back to
  *     its document for drill-down.
  */
-import { apiJson } from './supabase.js';
+import { apiJson, loadBootstrap } from './supabase.js';
 
 /** Account code -> legacy ``k`` tag, so ``ak('inv')`` finds the right account. */
 const KIND_BY_CODE = {
@@ -43,12 +43,26 @@ const RETURN_TYPE_BY_KIND = { sales_return: 'sret', purchase_return: 'pret' };
 const num = (v) => Number(v ?? 0);
 const day = (v) => String(v ?? '').slice(0, 10);
 
+/**
+ * Legacy rows carry Arabic-Indic digits inside free-text names ("دولاب ٣ ضلفة").
+ * The rest of the interface prints Latin digits, so normalise text at this
+ * boundary rather than in every screen.
+ */
+const AR_DIGITS = '٠١٢٣٤٥٦٧٨٩';
+const FA_DIGITS = '۰۱۲۳۴۵۶۷۸۹';
+const txt = (v) =>
+  String(v ?? '').replace(/[٠-٩۰-۹]/g, (ch) => {
+    const ar = AR_DIGITS.indexOf(ch);
+    return String(ar >= 0 ? ar : FA_DIGITS.indexOf(ch));
+  });
+
+
 /** Build ``S.accts`` from ``/accounts``. */
 function mapAccounts(rows) {
   return rows.map((a) => ({
     id: a.id,
     code: a.code,
-    name: a.name_ar || a.name,
+    name: txt(a.name_ar || a.name),
     name_en: a.name,
     t: { asset: 'A', liability: 'L', equity: 'Q', income: 'I', expense: 'X' }[a.type] || 'A',
     k: KIND_BY_CODE[Number(a.code)] || '',
@@ -63,10 +77,11 @@ function mapAccounts(rows) {
 function mapWarehouses(rows) {
   return rows.map((w) => ({
     id: w.id,
-    name: w.name_ar || w.name,
+    name: txt(w.name_ar || w.name),
     code: w.code,
     parentId: w.parent_id ?? null,
     isGroup: !!w.is_group,
+    kind: w.kind || '',
   }));
 }
 
@@ -82,7 +97,7 @@ function mapItems(rows, stock, units) {
   for (const row of rows || []) {
     byItem.set(row.id, {
       id: row.id,
-      name: row.name_ar || row.name,
+      name: txt(row.name_ar || row.name),
       sku: row.code,
       unit: unitName.get(row.base_unit_id) || 'قطعة',
       wh: 0,
@@ -102,7 +117,7 @@ function mapItems(rows, stock, units) {
     if (!item) {
       item = {
         id: row.item_id,
-        name: row.item_name_ar || row.item_name,
+        name: txt(row.item_name_ar || row.item_name),
         sku: row.item_code,
         unit: row.unit,
         wh: 0,
@@ -152,7 +167,7 @@ function mapCodes(stock) {
 function mapPartners(rows) {
   return rows.map((c) => ({
     id: c.id,
-    name: c.name,
+    name: txt(c.name),
     phone: c.phone || '',
     c: c.kind === 'customer' || c.kind === 'both' ? 1 : 0,
     s: c.kind === 'supplier' || c.kind === 'both' ? 1 : 0,
@@ -191,8 +206,9 @@ function mapInvoices(rows, items) {
         const item = l.item_id ? itemById.get(l.item_id) : null;
         return {
           iid: l.item_id ?? 0,
-          name: item?.name || l.description || '',
+          name: txt(item?.name || l.description || ''),
           v: '-',
+          wh: l.warehouse_id ?? inv.warehouse_id ?? 0,
           qty: num(l.quantity),
           price: num(l.unit_price),
           disc: num(l.discount_rate),
@@ -237,6 +253,8 @@ function mapJournal(rows) {
       ts: entry.entry_date ? new Date(entry.entry_date).getTime() : Date.now(),
       desc: entry.memo || '',
       src: entry.source_type || 'je',
+      // Lets the UI match an auto-generated entry to the document that made it.
+      sourceId: entry.source_id ?? 0,
     });
     for (const line of entry.lines || []) {
       L.push({
@@ -303,7 +321,7 @@ function mapWorkOrders(rows) {
 function mapTeam(rows) {
   return rows.map((m) => ({
     id: m.id,
-    name: m.full_name || m.email,
+    name: txt(m.full_name || m.email),
     p1: m.email,
     p2: '',
     gov: '',
@@ -317,17 +335,23 @@ function mapTeam(rows) {
 
 /** Settings -> the meta block the screens read (period, pricing, branding). */
 function mapSettings(settings) {
+  const logo = typeof settings.logo === 'string' ? settings.logo : '';
   return {
-    name: settings.company_name || 'MS-Factory',
-    logo: '',
+    name: txt(settings.company_name || 'MS-Factory'),
+    logo: /^data:image\/(?:png|jpeg|webp);base64,/i.test(logo) ? logo : '',
     curs: [settings.currency || 'EGP'],
     pct: { w: 20, r: 40 },
     hide: [],
+    biz: {
+      tax_no: txt(settings.tax_number || ''),
+      phone: txt(settings.phone || ''),
+      address: txt(settings.address || ''),
+    },
   };
 }
 
-/** Fetch every endpoint the read bridge needs, concurrently. */
-async function fetchAll() {
+/** Fetch every endpoint the read bridge needs, one request per collection. */
+async function fetchEach() {
   const paths = {
     accounts: '/accounts',
     contacts: '/contacts',
@@ -352,6 +376,37 @@ async function fetchAll() {
     out[name] = data;
   });
   return out;
+}
+
+/**
+ * Fetch every collection the screens need.
+ *
+ * ``/bootstrap`` returns them all in one authenticated call, which matters
+ * because the database is remote: each separate request paid for its own auth
+ * round trip, and thirteen of them dominated startup. The per-collection
+ * fallback stays for older deployments whose API predates the endpoint.
+ */
+async function fetchAll() {
+  const { data, error } = await loadBootstrap();
+  if (!error && data && Array.isArray(data.accounts)) {
+    return {
+      accounts: data.accounts,
+      contacts: data.contacts || [],
+      invoices: data.invoices || [],
+      payments: data.payments || [],
+      journal: data.journal || [],
+      items: data.items || [],
+      units: data.units || [],
+      stock: data.stock || [],
+      movements: data.movements || [],
+      warehouses: data.warehouses || [],
+      workOrders: data.work_orders || [],
+      team: data.team || [],
+      settings: data.settings ? { settings: data.settings } : { settings: {} },
+    };
+  }
+  if (error && error.status && error.status !== 404 && error.status < 500) throw error;
+  return fetchEach();
 }
 
 /** Load everything and push it into the legacy state. */

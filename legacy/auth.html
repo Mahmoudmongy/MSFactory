@@ -3,39 +3,112 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>تسجيل الدخول - مدير المصنع</title>
+<meta name="theme-color" content="#1877f2">
+<title>تسجيل الدخول - مدير الشركة</title>
 <link rel="stylesheet" href="./css/style.css">
 <style>
-  .auth-page{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px}
-  .auth-card{width:100%;max-width:380px;padding:24px}
-  /* Keep the intended login-card width when Vite places extracted CSS after this inline block. */
-  .auth-page .auth-card{max-width:380px}
-  .auth-card h1{margin:0 0 8px;font-size:22px}
-  .auth-form{display:flex;flex-direction:column}
-  .remember-row{display:flex;align-items:center;gap:8px;margin:12px 0}.remember-row input{width:auto}
+  /* Login screen: one accent, one card, no decorative noise. */
+  .auth-page{
+    min-height:100vh; min-height:100dvh;
+    display:flex; align-items:center; justify-content:center;
+    padding:calc(18px + env(safe-area-inset-top)) 16px calc(18px + env(safe-area-inset-bottom));
+    background:var(--bg);
+  }
+  .auth-card{
+    width:100%; max-width:380px; margin:0;
+    padding:28px 22px 22px; border-radius:18px;
+    background:var(--card); border:1px solid var(--bd);
+    box-shadow:var(--shadow-md);
+  }
+  .auth-brand{display:flex; flex-direction:column; align-items:center; gap:10px; margin-bottom:22px; text-align:center}
+  .auth-logo{
+    display:block; width:60px; height:60px; border-radius:15px; object-fit:contain;
+    background:var(--pr2); padding:10px;
+  }
+  .auth-brand h1{margin:0; font-size:19px; font-weight:700; letter-spacing:-.2px; line-height:1.35}
+  .auth-brand p{margin:0; color:var(--mu); font-size:13px}
+
+  .auth-form{display:flex; flex-direction:column; gap:2px}
+  .auth-form label{font-size:13px; font-weight:600; color:var(--mu); margin-top:12px}
+  .auth-form label:first-of-type{margin-top:0}
+  .auth-form input[type=text],
+  .auth-form input[type=password]{
+    width:100%; min-height:48px; margin:6px 0 0; padding:12px 13px;
+    font-size:16px; border-radius:11px; border:1px solid var(--bd);
+    background:var(--bg); color:var(--tx); transition:border-color .15s, box-shadow .15s;
+  }
+  .auth-form input:focus{
+    outline:none; border-color:var(--pr);
+    box-shadow:0 0 0 3px color-mix(in srgb, var(--pr) 18%, transparent);
+  }
+  .auth-form input::placeholder{color:var(--mu); opacity:.7}
+
+  .remember-row{
+    display:flex; align-items:center; gap:9px; margin:16px 0 4px;
+    font-size:14px; color:var(--tx); cursor:pointer; user-select:none;
+  }
+  .remember-row input[type=checkbox]{
+    width:20px; height:20px; margin:0; flex:none; accent-color:var(--pr); cursor:pointer;
+  }
+  #auth-login{
+    width:100%; min-height:50px; margin-top:18px;
+    font-size:16px; font-weight:700; border-radius:11px;
+    background:var(--pr); color:#fff; border:1px solid var(--pr);
+  }
+  #auth-login:active{filter:brightness(.94)}
+  #auth-login:disabled{opacity:.6}
+
+  .auth-note{
+    display:block; margin:0 0 14px; padding:11px 13px; border-radius:11px;
+    font-size:13.5px; line-height:1.5;
+    background:var(--pr2); color:var(--tx);
+    border:1px solid color-mix(in srgb, var(--pr) 26%, var(--bd));
+  }
+  .auth-note[hidden]{display:none!important}
+  .auth-note__title{display:block; font-weight:700}
+  .auth-note__hint{display:block; opacity:.85; margin-top:2px}
+  .auth-note.is-error{background:var(--err-bg); border-color:var(--err-bd); color:var(--err)}
+  .auth-note.is-warn{background:var(--warn-bg); border-color:var(--warn-bd); color:var(--warn)}
+  @media (max-width:400px){
+    .auth-card{padding:24px 18px 18px; border-radius:16px}
+    .auth-brand h1{font-size:18px}
+  }
 </style>
 </head>
 <body>
 <main class="auth-page">
-  <section class="card auth-card">
-    <header id="auth-brand" class="auth-brand">
-      <img id="auth-brand-logo" alt="شعار الشركة" hidden>
-      <h1 id="auth-brand-name">مدير المصنع</h1>
+  <section class="auth-card">
+    <header class="auth-brand">
+      <img class="auth-logo" id="auth-brand-logo" src="./assets/icon.svg" alt="" width="60" height="60">
+      <h1 id="auth-brand-name">مدير الشركة</h1>
+      <p>سجّل الدخول للمتابعة إلى حسابك</p>
     </header>
-    <p id="auth-status" class="mu" role="status" aria-live="polite"></p>
-    <p id="auth-msg" class="mu" role="status" aria-live="polite"></p>
+
+    <div id="auth-status" class="auth-note" role="status" aria-live="polite" hidden>
+      <span class="auth-note__title"></span>
+    </div>
+    <div id="auth-msg" class="auth-note is-error" role="alert" aria-live="assertive" hidden>
+      <span class="auth-note__title"></span>
+      <span class="auth-note__hint"></span>
+    </div>
 
     <form id="auth-form" class="auth-form" novalidate>
-      <label for="auth-email">اسم المستخدم أو البريد الإلكتروني</label>
-      <input id="auth-email" name="username" type="text" dir="ltr" autocomplete="username" autocapitalize="off" spellcheck="false">
-      <label for="auth-password">كلمة المرور</label>
-      <input id="auth-password" name="password" type="password" dir="ltr" autocomplete="current-password" minlength="6">
-      <label class="remember-row"><input type="checkbox" id="auth-remember" checked> تذكرني</label>
-      <div class="row">
-        <button type="button" id="auth-login">تسجيل الدخول</button>
-      </div>
-    </form>
+      <label for="auth-email">البريد الإلكتروني أو اسم المستخدم</label>
+      <input id="auth-email" name="username" type="text" dir="ltr"
+             autocomplete="username" autocapitalize="off" spellcheck="false"
+             placeholder="name@company.com">
 
+      <label for="auth-password">كلمة المرور</label>
+      <input id="auth-password" name="password" type="password" dir="ltr"
+             autocomplete="current-password" minlength="6" placeholder="••••••••">
+
+      <label class="remember-row">
+        <input type="checkbox" id="auth-remember" checked>
+        <span>تذكرني على هذا الجهاز</span>
+      </label>
+
+      <button type="button" id="auth-login">تسجيل الدخول</button>
+    </form>
   </section>
 </main>
 <script type="module" src="./js/auth.js"></script>

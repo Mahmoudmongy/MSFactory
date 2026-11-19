@@ -105,6 +105,9 @@ class Warehouse(Base, TenantMixin, TimestampMixin):
     name_ar: Mapped[str] = mapped_column(String(120), default="")
     parent_id: Mapped[int | None] = mapped_column(ForeignKey("warehouses.id"), nullable=True)
     is_group: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # What the warehouse holds: "finished", "raw", "supplies" or "" when unset.
+    # Drives the purchases-by-warehouse-type breakdown.
+    kind: Mapped[str] = mapped_column(String(20), default="", server_default="", nullable=False)
     address: Mapped[str] = mapped_column(String(255), default="")
     notes: Mapped[str] = mapped_column(Text, default="")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

@@ -181,7 +181,7 @@ class ProductionService:
             warehouse_id=order.warehouse_id,
             quantity=produced,
             unit_cost=unit_cost,
-            movement_date=order.due_date or order.start_date,
+            movement_date=self._posting_date(order.due_date or order.start_date),
             variant_id=order.variant_id,
             kind="production_receipt",
             source_type="production_receipt",
@@ -251,13 +251,24 @@ class ProductionService:
         self.db.flush()
         return order
 
+    @staticmethod
+    def _posting_date(planned: date | None) -> date:
+        """Date a stock movement and its journal entry may be booked on.
+
+        ``due_date`` is a plan, not an event: booking against it puts entries in
+        the future, where they drop out of period reports that end today. Honour
+        a backdated order date, but never book ahead of today.
+        """
+        today = utcnow().date()
+        return planned if planned and planned < today else today
+
     def _post(self, order: WorkOrder, *, debit_code: str, credit_code: str, amount, memo: str) -> None:
         debit = self.accounts.by_code(debit_code)
         credit = self.accounts.by_code(credit_code)
         if not debit or not credit:
             return
         self.accounting.post(
-            entry_date=order.due_date or order.start_date,
+            entry_date=self._posting_date(order.due_date or order.start_date),
             lines=[
                 EntryLine(account_id=debit.id, debit=to_money(amount), description=memo),
                 EntryLine(account_id=credit.id, credit=to_money(amount), description=memo),

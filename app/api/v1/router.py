@@ -7,6 +7,7 @@ from . import (
     accounts,
     audit,
     auth,
+    bootstrap,
     contacts,
     inventory,
     invoices,
@@ -20,6 +21,9 @@ from . import (
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(auth.router)
+# Registered before the resource routers so /bootstrap never collides with a
+# path parameter route such as /invoices/{invoice_id}.
+api_router.include_router(bootstrap.router)
 api_router.include_router(accounts.router)
 api_router.include_router(audit.router)
 api_router.include_router(contacts.router)

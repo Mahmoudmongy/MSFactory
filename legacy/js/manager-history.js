@@ -2,7 +2,7 @@ import { supabase } from './supabase.js';
 
 const $ = (s, root=document) => root.querySelector(s);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
-const money = value => Number(value || 0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+const money = value => Number(value || 0).toLocaleString('en-US',{maximumFractionDigits:2});
 const qty = value => Number(value || 0).toLocaleString('en-US',{maximumFractionDigits:3});
 const date = value => {
   if (!value) return '—';
@@ -80,12 +80,38 @@ async function getOwner() {
   if(error || !user) throw new Error('جلسة الدخول غير صالحة. سجّل الدخول مرة أخرى.');
   const {data:profile,error:profileError} = await supabase.from('profiles')
     .select('id,created_by,is_admin,permissions').eq('id',user.id).maybeSingle();
-  if(profileError || !profile) throw new Error('تعذر تحديد حساب المصنع صاحب البيانات.');
+  if(profileError || !profile) throw new Error('تعذر تحديد حساب الشركة صاحب البيانات.');
   currentProfile = profile;
   ownerId = profile.created_by || profile.id;
 }
+/**
+ * The panel is only meaningful once historical rows exist. Mounting it against
+ * an empty dataset showed a button that opened a screen of zeros, so probe once
+ * and stay hidden until an import has landed.
+ */
+let probe = null;
+function historicalDataExists() {
+  if (!probe) {
+    probe = (async () => {
+      const { count, error } = await supabase
+        .from('customers')
+        .select('id', { count: 'exact', head: true });
+      return !error && (count || 0) > 0;
+    })().catch(() => false);
+  }
+  return probe;
+}
+
+let mounting = null;
 function ensureUi() {
+  if ($('#manager-history-open')) return Promise.resolve();
+  if (!mounting) mounting = mountUi().catch(() => {});
+  return mounting;
+}
+
+async function mountUi() {
   if ($('#manager-history-open')) return;
+  if (!(await historicalDataExists())) return;
   const top = $('#top');
   const tabsBar = $('#tabs');
   if (!top || !tabsBar) return;
@@ -129,7 +155,7 @@ function ensureUi() {
   #manager-history-panel .mh-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;background:var(--card,#fff);border:1px solid var(--bd,#ddd);border-radius:12px;padding:14px;margin-bottom:12px}
   #manager-history-panel .mh-tabs{display:flex;gap:7px;flex-wrap:wrap;margin:12px 0}
   #manager-history-panel .mh-tabs button{border:1px solid var(--bd,#ddd);border-radius:8px;padding:9px 13px;background:var(--card,#fff);color:inherit;cursor:pointer}
-  #manager-history-panel .mh-tabs button.active{background:#0f766e;color:#fff;border-color:#0f766e}
+  #manager-history-panel .mh-tabs button.active{background:#1877f2;color:#fff;border-color:#1877f2}
   #manager-history-panel .mh-card{background:var(--card,#fff);border:1px solid var(--bd,#ddd);border-radius:12px;padding:14px;margin:10px 0;overflow:auto}
   #manager-history-panel .mh-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
   #manager-history-panel .mh-stat{background:var(--card,#fff);border:1px solid var(--bd,#ddd);border-radius:10px;padding:14px}
@@ -139,8 +165,8 @@ function ensureUi() {
   #manager-history-panel table{width:100%;border-collapse:collapse;min-width:650px}
   #manager-history-panel th,#manager-history-panel td{padding:9px 10px;border-bottom:1px solid var(--bd,#ddd);text-align:right;vertical-align:top}
   #manager-history-panel th{position:sticky;top:0;background:var(--card,#fff)}
-  #manager-history-panel details summary{cursor:pointer;color:#0f766e;font-weight:700}
-  #manager-history-panel .mh-detail summary{cursor:pointer;color:#0f766e;font-weight:700;white-space:nowrap}
+  #manager-history-panel details summary{cursor:pointer;color:#1877f2;font-weight:700}
+  #manager-history-panel .mh-detail summary{cursor:pointer;color:#1877f2;font-weight:700;white-space:nowrap}
   #manager-history-panel .mh-detail-content{min-width:240px;max-width:min(760px,80vw);max-height:420px;overflow:auto;margin-top:8px;padding:10px;border:1px solid var(--bd,#ddd);border-radius:9px;background:var(--bg,#f7f8fa)}
   #manager-history-panel .mh-detail-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin:0}
   #manager-history-panel .mh-detail-fields>div{min-width:0;padding:7px 8px;border-bottom:1px solid var(--bd,#ddd)}
@@ -148,7 +174,7 @@ function ensureUi() {
   #manager-history-panel .mh-detail-fields dd{margin:0;overflow-wrap:anywhere;direction:auto}
   #manager-history-panel .mh-detail-list{display:grid;gap:8px}
   #manager-history-panel .mh-detail-item{padding:9px;border:1px solid var(--bd,#ddd);border-radius:8px;background:var(--card,#fff)}
-  #manager-history-panel .mh-detail-item>b{display:block;margin-bottom:6px;color:#0f766e}
+  #manager-history-panel .mh-detail-item>b{display:block;margin-bottom:6px;color:#1877f2}
   @media(max-width:640px){#manager-history-panel .mh-detail-fields{grid-template-columns:1fr}}
   #manager-history-panel .mh-tag{display:inline-block;border-radius:6px;padding:3px 7px;background:rgba(15,118,110,.12);font-size:12px}
   #manager-history-panel .mh-negative{color:#b91c1c;font-weight:700}

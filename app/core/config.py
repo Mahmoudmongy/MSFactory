@@ -29,8 +29,12 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = "postgresql+psycopg://msfactory:msfactory_dev_pw@127.0.0.1:5432/msfactory"
-    db_pool_size: int = 10
-    db_max_overflow: int = 20
+    # Kept well under the Supabase session-pooler limit (15 clients) so the
+    # bootstrap fan-out plus concurrent users cannot exhaust the pooler.
+    db_pool_size: int = 6
+    db_max_overflow: int = 4
+    # Supabase closes idle pooler sessions; recycle before it does.
+    db_pool_recycle: int = 240
     db_echo: bool = False
 
     # Redis (rate limiting, caching, background jobs)

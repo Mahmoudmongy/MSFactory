@@ -17,7 +17,7 @@ const typeLabels = {
  docs:['الفواتير','Invoices'],vch:['السندات','Vouchers'],po:['أوامر الإنتاج','Production orders'],je:['القيود اليومية','Journal entries'],
  wo:['الهالك','Waste'],partners:['العملاء والموردون','Customers & suppliers'],customers:['العملاء','Customers'],suppliers:['الموردون','Suppliers'],
  sret:['مرتجعات المبيعات','Sales returns'],pret:['مرتجعات المشتريات','Purchase returns'],items:['الأصناف','Items'],codes:['الباركود','Barcodes'],
- mv:['حركات المخزون','Stock movements'],wh:['المخازن','Warehouses'],accts:['الحسابات','Accounts'],L:['بيانات المصنع','Factory data'],
+ mv:['حركات المخزون','Stock movements'],wh:['المخازن','Warehouses'],accts:['الحسابات','Accounts'],L:['بيانات الشركة','Factory data'],
  payroll:['الأجور','Payroll'],profile:['الموظفون والصلاحيات','Employees & permissions']
 };
 const opLabel = op => labels[op] ? text(labels[op][0],labels[op][1]) : op;
@@ -70,7 +70,7 @@ async function verifyAdmin() {
   if(error||!user) throw new Error(text('جلسة الدخول غير صالحة. سجّل الدخول مرة أخرى.','Your session is invalid. Please sign in again.'));
   const {data,error:profileError} = await supabase.from('profiles').select('id,created_by,is_admin').eq('id',user.id).maybeSingle();
   if(profileError||!data) throw new Error(text('تعذر التحقق من صلاحية الحساب.','Could not verify account permissions.'));
-  if(data.is_admin!==true || data.created_by) throw new Error(text('سجل التدقيق والتراجع متاح لصاحب المصنع فقط.','The audit log is available to the factory owner only.'));
+  if(data.is_admin!==true || data.created_by) throw new Error(text('سجل التدقيق والتراجع متاح لصاحب الشركة فقط.','The audit log is available to the factory owner only.'));
   ownerId=data.id;
 }
 const status = (message,error=false) => {

@@ -111,3 +111,7 @@ if LEGACY_DIR.exists():
     # legacy service worker scoped to /app, so it can never intercept the
     # modern app's requests.
     app.mount("/app", StaticFiles(directory=LEGACY_DIR, html=True), name="legacy")
+
+    preview_dir = Path(__file__).resolve().parent.parent / "preview"
+    if preview_dir.is_dir():
+        app.mount("/preview", StaticFiles(directory=preview_dir, html=True), name="preview")

@@ -11,3 +11,7 @@ venv/
 .hypothesis/
 .ruff_cache/
 .openhands/
+
+# Local visual-preview gallery (screenshots are not source)
+preview/
+.agent_tmp/

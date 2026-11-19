@@ -108,3 +108,30 @@ def test_new_cash_account_reflects_a_receipt(client):
 
     balance = client.get(f"/api/v1/accounts/{till['id']}/balance", headers=auth(token)).json()
     assert float(balance["balance"]) == 500.0
+
+
+def test_voucher_entry_points_back_at_the_voucher(client):
+    """The recent-activity list needs to know a voucher is already posted and to
+    avoid listing its auto-generated entry a second time, so the journal has to
+    carry the originating document's id, not just its type."""
+    token = register(client, email="link@acme.eg")
+    codes = accounts_by_code(client, token)
+    contact = client.post(
+        "/api/v1/contacts", headers=auth(token), json={"name": "عميل نقدي", "kind": "customer"}
+    ).json()
+    payment = client.post(
+        "/api/v1/payments",
+        headers=auth(token),
+        json={
+            "kind": "receive",
+            "contact_id": contact["id"],
+            "bank_account_id": codes["1010"]["id"],
+            "amount": "700.00",
+            "date": "2026-03-02",
+        },
+    ).json()
+
+    entries = client.get("/api/v1/journal", headers=auth(token)).json()
+    linked = [e for e in entries if e["source_type"] == "payment"]
+    assert linked, "the voucher should have posted an entry"
+    assert linked[0]["source_id"] == payment["id"]

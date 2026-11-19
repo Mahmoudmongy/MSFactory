@@ -161,6 +161,42 @@ function invoiceLines(doc, items) {
     });
 }
 
+/**
+ * Persist the company profile edited in الإعدادات -> بيانات الشركة.
+ *
+ * ``saveBiz`` writes scalars onto ``S`` rather than pushing a row, so it cannot
+ * use ``wrapSave``. The screen is the only writer of these fields, so wrapping
+ * it directly keeps name and logo in the database with everything else.
+ */
+function wrapBizSave() {
+  const original = window.saveBiz;
+  if (typeof original !== 'function' || original.__factoryWrapped) return;
+
+  const wrapped = function (...args) {
+    const result = original.apply(this, args);
+    const state = window.__factoryGetState?.() || {};
+    const biz = state.biz || {};
+    const settings = {
+      company_name: String(state.name || '').trim(),
+      logo: typeof state.logo === 'string' ? state.logo : '',
+      tax_number: String(biz.tax_no || '').trim(),
+      phone: String(biz.phone || '').trim(),
+      address: String(biz.address || '').trim(),
+    };
+    for (const key of Object.keys(settings)) {
+      if (!settings[key]) delete settings[key];
+    }
+    if (Object.keys(settings).length) {
+      pending = pending
+        .then(() => runWork('saveBiz', [{ entity: null, request: () => json('/settings', 'PATCH', { settings }) }]))
+        .catch((error) => console.error('Write bridge (saveBiz):', error));
+    }
+    return result;
+  };
+  wrapped.__factoryWrapped = true;
+  window.saveBiz = wrapped;
+}
+
 /** Install the wrappers. Safe to call more than once. */
 export function installWriteBridge() {
   // --- customers and suppliers ---------------------------------------------
@@ -440,4 +476,6 @@ export function installWriteBridge() {
         .filter(Boolean);
     },
   });
+
+  wrapBizSave();
 }
