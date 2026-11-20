@@ -1586,8 +1586,18 @@ let lastNavClick = {time:0, target:''};
 function handleNavClick(e,sid){if(e&&e.button===1){e.preventDefault();go(sid,0,true);return;}go(sid);}
 function isMobile(){ return window.innerWidth <= 860; }
 let deferredPrompt=null;window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPrompt=e;if(CUR&&CUR.sid=='set')render()});
-function canInstall(){return !!deferredPrompt}
-async function promptInstall(){if(!deferredPrompt)return;deferredPrompt.prompt();await deferredPrompt.userChoice;deferredPrompt=null;if(CUR&&CUR.sid=='set')render()}
+window.addEventListener('appinstalled',()=>{deferredPrompt=null;toast('تم تثبيت التطبيق على الجهاز');if(CUR&&CUR.sid=='set')render()});
+/* iOS Safari never fires beforeinstallprompt, so installation there is a manual
+   Share > Add to Home Screen. Detect it to offer the steps instead of hiding
+   the option entirely. */
+function isIosSafari(){return /iphone|ipad|ipod/i.test(navigator.userAgent||'')&&!/crios|fxios|edgios/i.test(navigator.userAgent||'')}
+function canInstall(){return !!deferredPrompt||(isIosSafari()&&!isStandalone())}
+async function promptInstall(){
+ if(deferredPrompt){deferredPrompt.prompt();await deferredPrompt.userChoice;deferredPrompt=null;if(CUR&&CUR.sid=='set')render();return}
+ if(isIosSafari()&&!isStandalone()){
+  sh('<h3>تثبيت التطبيق على الآيفون</h3><div class="card"><ol><li>اضغط زر المشاركة في سفاري (المربع اللي فيه سهم لفوق).</li><li>اختر «إضافة إلى الشاشة الرئيسية».</li><li>اضغط «إضافة».</li></ol><p class="mu">بعد كده هيفتح زي أي تطبيق من الشاشة الرئيسية بدون شريط العنوان.</p></div><div class="row">'+bk+'</div>');
+ }
+}
 function isStandalone(){return matchMedia('(display-mode: standalone)').matches||navigator.standalone}
 function closeSB(){ try{ const sb=$g('#sb'); if(sb){ sb.classList.remove('open'); } const ov=$g('#sb-overlay'); if(ov) ov.style.display='none'; document.body.style.overflow=''; }catch(e){} }
 function openSB(){ try{ const sb=$g('#sb'); sb.classList.add('open'); const ov=$g('#sb-overlay'); if(ov) ov.style.display='block'; if(isMobile()) document.body.style.overflow='hidden'; }catch(e){} }
