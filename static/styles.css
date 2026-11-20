@@ -680,3 +680,6 @@ td.num, th.num { text-align: left; }
 }
 .assistant__row:last-child { border-block-end: 0; }
 .assistant__row strong { color: var(--brand-700); }
+
+/* `hidden` must win over the flex/grid display rules the form fields carry. */
+[hidden] { display: none !important; }

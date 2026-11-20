@@ -59,6 +59,10 @@ COSTING_METHODS = ("fifo", "weighted_average")
 # source is "purchased". Reports split margin on this one distinction.
 MANUFACTURED_SOURCE = "production_receipt"
 
+# Warehouse the server creates for write-offs. Never a default home for goods:
+# its code sorts first, so "first leaf warehouse" would pick it every time.
+DAMAGE_WAREHOUSE_CODE = "DMG"
+
 
 class InventoryService:
     def __init__(self, db: Session, company_id: int, user_id: int | None = None):
@@ -361,10 +365,18 @@ class InventoryService:
         if not item.track_inventory:
             raise ValidationError(f"الصنف «{item.name}» غير مخزني (خدمة)")
 
+        # Two separate checks, because they answer different questions: the
+        # company may hold the item while this warehouse is empty, and issuing
+        # from the wrong warehouse silently drives its balance negative.
         on_hand = self.layers.quantity_on_hand(item.id, variant.id)
         if quantity > on_hand:
             raise ValidationError(
                 f"الكمية المطلوبة {quantity} أكبر من الرصيد المتاح {on_hand} للصنف «{item.name}»"
+            )
+        in_warehouse = self.layers.quantity_in_warehouse(item.id, warehouse_id, variant.id)
+        if quantity > in_warehouse:
+            raise ValidationError(
+                f"الكمية المطلوبة {quantity} أكبر من رصيد المخزن {in_warehouse} للصنف «{item.name}»"
             )
 
         consumed, cost_total = self.layers.consume(
@@ -546,7 +558,9 @@ class InventoryService:
         item = self.items.get(item_id)
         variant = self.resolve_variant(item.id, variant_id)
         counted = Decimal(str(counted_quantity or 0)).quantize(FOUR)
-        current = self.layers.quantity_on_hand(item.id, variant.id)
+        # A count is physical: it measures one warehouse, so the delta has to be
+        # against that warehouse's balance, not the company total.
+        current = self.layers.quantity_in_warehouse(item.id, warehouse_id, variant.id)
         delta = counted - current
         if delta == 0:
             return None
@@ -693,21 +707,39 @@ class InventoryService:
             split[key]["cost"] += to_money(total)
         return split
 
-    def resolve_warehouse(self, item: Item, warehouse_id: int | None) -> int:
+    def resolve_warehouse(
+        self, item: Item, warehouse_id: int | None, *, require_stock: bool = False
+    ) -> int:
         """Pick the warehouse to move stock in or out of.
 
-        An explicit choice wins; otherwise the item's default; otherwise the
-        first leaf warehouse, so a single-warehouse company need not choose.
+        An explicit choice wins; otherwise the item's default; otherwise a leaf
+        warehouse that actually holds the item, and only then the first leaf.
+        ``require_stock`` makes the last fallback an error instead of guessing,
+        which is what a sale needs: posting a sale out of an empty warehouse
+        would drive that balance negative.
         """
         if warehouse_id:
             self._leaf_warehouse(warehouse_id)
             return warehouse_id
         if item.default_warehouse_id:
             return item.default_warehouse_id
-        for warehouse in self.warehouses.list():
-            if not warehouse.is_group:
-                return warehouse.id
-        raise ValidationError("لا يوجد مخزن فرعي يمكن الصرف منه — أنشئ مخزناً أولاً")
+
+        # «هالك المخزن» is created for write-offs and must never be picked as a
+        # default home for goods — its code sorts first, so a naive "first leaf"
+        # would send every unstamped sale there.
+        leaves = [w for w in self.warehouses.list() if not w.is_group]
+        leaves = [w for w in leaves if w.code != DAMAGE_WAREHOUSE_CODE]
+        if not leaves:
+            raise ValidationError("لا يوجد مخزن فرعي يمكن الصرف منه — أنشئ مخزناً أولاً")
+
+        holding = [w for w in leaves if self.layers.quantity_in_warehouse(item.id, w.id) > ZERO]
+        if holding:
+            return holding[0].id
+        if require_stock:
+            raise ValidationError(
+                f"الصنف «{item.name}» غير موجود في أي مخزن — استلمه أولاً أو حدد المخزن"
+            )
+        return leaves[0].id
 
     def stock_on_hand(self, *, warehouse_id: int | None = None, item_id: int | None = None) -> list[dict]:
         return self.layers.on_hand_rows(warehouse_id=warehouse_id, item_id=item_id)

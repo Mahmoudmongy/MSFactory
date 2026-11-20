@@ -427,6 +427,7 @@ class ItemOut(ORMModel):
     purchase_price: Decimal
     sale_price: Decimal
     reorder_level: Decimal
+    default_warehouse_id: int | None = None
     is_active: bool
 
 

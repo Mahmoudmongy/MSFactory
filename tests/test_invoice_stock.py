@@ -9,6 +9,7 @@ one having to label the invoice.
 """
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 
 import pytest
@@ -76,7 +77,7 @@ def seed_layer(item_id, warehouse_id, *, quantity, unit_cost, source_type, recei
     """
     from sqlalchemy import select
 
-    from app.db.models import Item, ItemVariant, StockLayer
+    from app.db.models import Item, ItemVariant, StockLayer, StockMovement
     from app.db.session import SessionLocal
     from app.repositories.inventory import StockLayerRepository
 
@@ -87,17 +88,34 @@ def seed_layer(item_id, warehouse_id, *, quantity, unit_cost, source_type, recei
             select(ItemVariant.id).where(ItemVariant.item_id == item_id).limit(1)
         )
         repo = StockLayerRepository(session, company_id)
+        layer = StockLayer(
+            company_id=company_id,
+            item_id=item_id,
+            variant_id=variant_id,
+            received_at=received_at,
+            quantity_received=Decimal(str(quantity)),
+            quantity_remaining=Decimal(str(quantity)),
+            unit_cost=Decimal(str(unit_cost)),
+            warehouse_id=warehouse_id,
+            source_type=source_type,
+        )
+        repo.db.add(layer)
+        # The layer alone is invisible to the warehouse balance, which is read
+        # from the movement ledger; the two must be seeded together or the sale
+        # that follows looks like an issue from an empty warehouse.
         repo.db.add(
-            StockLayer(
+            StockMovement(
                 company_id=company_id,
+                movement_date=date.fromisoformat(received_at),
+                kind="receipt",
                 item_id=item_id,
                 variant_id=variant_id,
-                received_at=received_at,
-                quantity_received=Decimal(str(quantity)),
-                quantity_remaining=Decimal(str(quantity)),
-                unit_cost=Decimal(str(unit_cost)),
                 warehouse_id=warehouse_id,
+                quantity=Decimal(str(quantity)),
+                unit_cost=Decimal(str(unit_cost)),
+                total_cost=Decimal(str(quantity)) * Decimal(str(unit_cost)),
                 source_type=source_type,
+                reference="seed",
             )
         )
         session.commit()

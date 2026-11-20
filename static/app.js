@@ -43,7 +43,7 @@ const store = {
   user: null,
   memberships: [],
   companyId: null,
-  cache: { accounts: null, contacts: null, settings: null },
+  cache: { accounts: null, contacts: null, settings: null, inventory: null },
 
   load() {
     try {
@@ -87,7 +87,7 @@ const store = {
     this.user = null;
     this.memberships = [];
     this.companyId = null;
-    this.cache = { accounts: null, contacts: null };
+    this.cache = { accounts: null, contacts: null, settings: null, inventory: null };
     this.save(null);
   },
 };
@@ -2388,16 +2388,73 @@ function openAccountSheet(accounts, onDone) {
     }
   };
 }
+// ------------------------------------------------- inventory (items, warehouses, stock)
 
-// ------------------------------------------------- inventory (items & warehouses)
+/* The inventory module is four lists behind one route: balances, the item
+   catalogue, the warehouses and the movement ledger. Movements (receipt, issue,
+   transfer, damage, count) are recorded from a sheet, so a storekeeper can move
+   stock from a phone without leaving the screen. */
+
+const ITEM_TYPE_LABELS = {
+  purchased: "مُشترى",
+  manufactured: "مُصنَّع",
+  both: "مُشترى ومُصنَّع",
+  service: "خدمة",
+};
+
+const MOVEMENT_KIND_LABELS = {
+  opening: "رصيد افتتاحي",
+  receipt: "استلام",
+  issue: "صرف",
+  transfer_in: "تحويل وارد",
+  transfer_out: "تحويل صادر",
+  production_issue: "صرف للإنتاج",
+  production_receipt: "استلام من الإنتاج",
+  adjustment_in: "تسوية بالزيادة",
+  adjustment_out: "تسوية بالنقص",
+  damage: "هالك",
+};
+
+const itemLabel = (item) => item?.name_ar || item?.name || "";
 
 async function renderInventory() {
+  const view = hashParam("inv", "stock");
+  const tabs = [
+    { key: "stock", label: "الأرصدة" },
+    { key: "items", label: "الأصناف" },
+    { key: "warehouses", label: "المخازن" },
+    { key: "movements", label: "الحركات" },
+  ];
+  if (view === "items") return renderInventoryItems(tabs, view);
+  if (view === "warehouses") return renderInventoryWarehouses(tabs, view);
+  if (view === "movements") return renderInventoryMovements(tabs, view);
+  return renderInventoryStock(tabs, view);
+}
+
+/** Cached lookups so the four tabs and the movement sheet share one fetch. */
+async function loadInventoryLookups() {
+  if (!store.cache.inventory) {
+    const [items, warehouses, units] = await Promise.all([
+      api("/inventory/items"),
+      api("/inventory/warehouses"),
+      api("/inventory/units"),
+    ]);
+    store.cache.inventory = { items, warehouses, units };
+  }
+  return store.cache.inventory;
+}
+
+function refreshInventoryLookups() {
+  store.cache.inventory = null;
+}
+
+async function renderInventoryStock(tabs, view) {
   setScreen(spinner(), { appbar: appbar({ title: "الأصناف والمخازن" }), tabbar: tabbar() });
   try {
-    const [stock, summary, warehouses] = await Promise.all([
+    const [stock, summary, lookups] = await Promise.all([
       api("/inventory/stock"),
       api("/inventory/summary"),
-      api("/inventory/warehouses"),
+      loadInventoryLookups(),
     ]);
     const rows = stock
       .map(
@@ -2412,6 +2469,7 @@ async function renderInventory() {
       .join("");
     setScreen(
       el(`<div>
+        ${subTabs("inv", tabs, view)}
         <div class="kpi-grid">
           <div class="kpi"><div class="kpi__label">قيمة المخزون</div>
             <div class="kpi__value num">${money(summary.total_value)}</div></div>
@@ -2429,15 +2487,549 @@ async function renderInventory() {
             <tbody>${rows}</tbody></table></div>`
             : emptyState("📦", "لا يوجد مخزون", "أضف أصنافاً واستلم مخزوناً للبدء")}
         </div>
-        <div class="card"><div class="card__head"><h2 class="card__title">المخازن</h2></div>
-          <div class="list__meta">${warehouses.map((w) => escapeHtml(w.name_ar || w.name)).join(" · ") || "لا توجد مخازن"}</div>
-        </div>
+        ${store.can("stock.manage")
+          ? `<div class="action-bar"><button class="btn" data-move>⇄ تسجيل حركة مخزون</button></div>`
+          : ""}
       </div>`),
       { appbar: appbar({ title: "الأصناف والمخازن" }), tabbar: tabbar() }
+    );
+    document.querySelector("[data-move]")?.addEventListener("click", () => openMovementSheet(lookups));
+  } catch (error) {
+    setScreen(emptyState("⚠️", "خطأ", error.message), { tabbar: tabbar() });
+  }
+}
+
+async function renderInventoryItems(tabs, view) {
+  setScreen(spinner(), { appbar: appbar({ title: "الأصناف" }), tabbar: tabbar() });
+  try {
+    const { units, warehouses } = await loadInventoryLookups();
+    const search = hashParam("q");
+    const items = await api(`/inventory/items${search ? `?search=${encodeURIComponent(search)}` : ""}`);
+    const unitName = (id) => units.find((u) => u.id === id)?.code || "";
+    const rows = items
+      .map(
+        (item) => `<li><button class="list__item" data-item="${item.id}">
+        <div class="list__main">
+          <div class="list__title">${escapeHtml(itemLabel(item))}</div>
+          <div class="list__meta num">${escapeHtml(item.code || "—")}
+            · ${escapeHtml(ITEM_TYPE_LABELS[item.item_type] || item.item_type)}
+            ${item.base_unit_id ? ` · ${escapeHtml(unitName(item.base_unit_id))}` : ""}
+            ${item.track_inventory ? "" : " · لا يتابع مخزوناً"}</div>
+        </div>
+        <div style="text-align:end">
+          <div class="list__value num">${money(item.sale_price)}</div>
+          ${item.is_active ? "" : '<div class="badge">موقوف</div>'}
+        </div>
+        <span style="color:var(--ink-400)">‹</span></button></li>`
+      )
+      .join("");
+    setScreen(
+      el(`<div>
+        ${subTabs("inv", tabs, view)}
+        <div class="card">
+          <div class="field" style="margin:0">
+            <input class="input" id="item-search" type="search" placeholder="ابحث بالاسم أو الكود"
+              value="${escapeHtml(search)}" />
+          </div>
+        </div>
+        <div class="card card--flush">
+          ${items.length ? `<ul class="list">${rows}</ul>`
+            : emptyState("◇", "لا توجد أصناف", "أضف صنفاً ليظهر في الفواتير والمخزون")}
+        </div>
+        ${store.can("item.manage")
+          ? `<div class="action-bar"><button class="btn" data-new-item>＋ صنف جديد</button></div>`
+          : ""}
+      </div>`),
+      { appbar: appbar({ title: "الأصناف" }), tabbar: tabbar() }
+    );
+
+    const searchInput = document.querySelector("#item-search");
+    searchInput?.addEventListener("change", () => {
+      const value = searchInput.value.trim();
+      location.hash = value ? `#/inventory?inv=items&q=${encodeURIComponent(value)}` : "#/inventory?inv=items";
+    });
+    document.querySelector("[data-new-item]")?.addEventListener("click", () =>
+      openItemSheet({ units, warehouses }, () => {
+        refreshInventoryLookups();
+        renderInventoryItems(tabs, view);
+      })
+    );
+    document.querySelectorAll("[data-item]").forEach((button) => {
+      button.onclick = () =>
+        openItemSheet({ units, warehouses, itemId: Number(button.dataset.item) }, () => {
+          refreshInventoryLookups();
+          renderInventoryItems(tabs, view);
+        });
+    });
+  } catch (error) {
+    setScreen(emptyState("⚠️", "خطأ", error.message), { tabbar: tabbar() });
+  }
+}
+
+/** Create or edit an item. Editing loads the detail so variants come along. */
+function openItemSheet({ units, warehouses, itemId }, onDone) {
+  const isEdit = Boolean(itemId);
+  const form = el(`<form novalidate>
+    <div class="field"><label class="field__label">الاسم</label>
+      <input class="input" name="name_ar" required placeholder="مثال: ورق A4" /></div>
+    <div class="field"><label class="field__label">الكود</label>
+      <input class="input num" name="code" placeholder="اتركه فارغاً للتوليد التلقائي" /></div>
+    <div class="field"><label class="field__label">النوع</label>
+      <select class="select" name="item_type">
+        ${Object.entries(ITEM_TYPE_LABELS)
+          .map(([key, label]) => `<option value="${key}">${label}</option>`)
+          .join("")}
+      </select></div>
+    <div class="field"><label class="field__label">الوحدة</label>
+      <select class="select" name="base_unit_id">
+        <option value="">بدون</option>
+        ${units
+          .map((u) => `<option value="${u.id}">${escapeHtml(u.code)} — ${escapeHtml(u.name_ar || u.name)}</option>`)
+          .join("")}
+      </select></div>
+    <div class="field"><label class="field__label">المخزن الافتراضي</label>
+      <select class="select" name="default_warehouse_id">
+        <option value="">بدون</option>
+        ${warehouses
+          .filter((w) => !w.is_group)
+          .map((w) => `<option value="${w.id}">${escapeHtml(w.name_ar || w.name)}</option>`)
+          .join("")}
+      </select></div>
+    <div class="field"><label class="field__label">سعر الشراء</label>
+      <input class="input num" name="purchase_price" inputmode="decimal" value="0" /></div>
+    <div class="field"><label class="field__label">سعر البيع</label>
+      <input class="input num" name="sale_price" inputmode="decimal" value="0" /></div>
+    <div class="field"><label class="field__label">حد إعادة الطلب</label>
+      <input class="input num" name="reorder_level" inputmode="decimal" value="0" /></div>
+    <label class="list__item" style="gap:10px">
+      <input type="checkbox" name="track_inventory" checked />
+      <div class="list__main"><div class="list__title">يتابع المخزون</div>
+        <div class="list__meta">أزل العلامة للخدمات التي لا تُخزَّن</div></div>
+    </label>
+    <button class="btn btn--block" type="submit" style="margin-top:12px">${
+      isEdit ? "حفظ التعديلات" : "حفظ الصنف"
+    }</button>
+  </form>`);
+
+  const close = openSheet(isEdit ? "تعديل الصنف" : "صنف جديد", form);
+
+  if (isEdit) {
+    api(`/inventory/items/${itemId}`)
+      .then((item) => {
+        for (const [key, value] of Object.entries(item)) {
+          const field = form.elements[key];
+          if (!field) continue;
+          if (field.type === "checkbox") field.checked = Boolean(value);
+          else if (value !== null && value !== undefined) field.value = value;
+        }
+      })
+      .catch((error) => toast(error.message, "error"));
+  }
+
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    const data = new FormData(form);
+    const name = String(data.get("name_ar") || "").trim();
+    if (!name) return toast("أدخل اسم الصنف", "error");
+    const body = {
+      name_ar: name,
+      name,
+      code: String(data.get("code") || "").trim(),
+      item_type: data.get("item_type"),
+      base_unit_id: data.get("base_unit_id") ? Number(data.get("base_unit_id")) : null,
+      default_warehouse_id: data.get("default_warehouse_id")
+        ? Number(data.get("default_warehouse_id"))
+        : null,
+      purchase_price: Number(data.get("purchase_price") || 0),
+      sale_price: Number(data.get("sale_price") || 0),
+      reorder_level: Number(data.get("reorder_level") || 0),
+      track_inventory: form.elements.track_inventory.checked,
+    };
+    if (!body.code) delete body.code; // let the server number it
+    try {
+      if (isEdit) await api(`/inventory/items/${itemId}`, { method: "PATCH", body });
+      else await api("/inventory/items", { method: "POST", body });
+      toast(isEdit ? "تم حفظ التعديلات" : "تم إضافة الصنف", "success");
+      close();
+      await onDone();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  };
+}
+
+async function renderInventoryWarehouses(tabs, view) {
+  setScreen(spinner(), { appbar: appbar({ title: "المخازن" }), tabbar: tabbar() });
+  try {
+    const warehouses = await api("/inventory/warehouses");
+    const byId = new Map(warehouses.map((w) => [w.id, w]));
+    // Children render under their parent so a tree of sub-warehouses reads as
+    // one structure rather than a flat list with unexplained indentation.
+    const depthOf = (w) => {
+      let depth = 0;
+      let node = w;
+      const seen = new Set();
+      while (node?.parent_id && !seen.has(node.parent_id)) {
+        seen.add(node.parent_id);
+        node = byId.get(node.parent_id);
+        depth += 1;
+        if (depth > 8) break;
+      }
+      return depth;
+    };
+    const ordered = [...warehouses].sort((a, b) => {
+      const byDepth = depthOf(a) - depthOf(b);
+      return byDepth !== 0 ? byDepth : String(a.code).localeCompare(String(b.code));
+    });
+    const rows = ordered
+      .map((w) => {
+        const depth = depthOf(w);
+        return `<li><button class="list__item" data-wh="${w.id}">
+        <div class="list__main" style="padding-inline-start:${depth * 16}px">
+          <div class="list__title">${escapeHtml(w.name_ar || w.name)}</div>
+          <div class="list__meta num">${escapeHtml(w.code || "—")}${w.is_group ? " · مجموعة" : ""}${
+            w.is_active ? "" : " · موقوف"
+          }</div>
+        </div>
+        <span style="color:var(--ink-400)">‹</span></button></li>`;
+      })
+      .join("");
+    setScreen(
+      el(`<div>
+        ${subTabs("inv", tabs, view)}
+        <div class="card card--flush">
+          ${warehouses.length ? `<ul class="list">${rows}</ul>`
+            : emptyState("🏬", "لا توجد مخازن", "أضف مخزناً رئيسياً ثم فروعاً تحته")}
+        </div>
+        ${store.can("warehouse.manage")
+          ? `<div class="action-bar"><button class="btn" data-new-wh>＋ مخزن جديد</button></div>`
+          : ""}
+      </div>`),
+      { appbar: appbar({ title: "المخازن" }), tabbar: tabbar() }
+    );
+    const reload = () => {
+      refreshInventoryLookups();
+      renderInventoryWarehouses(tabs, view);
+    };
+    document.querySelector("[data-new-wh]")?.addEventListener("click", () =>
+      openWarehouseSheet({ warehouses }, reload)
+    );
+    document.querySelectorAll("[data-wh]").forEach((button) => {
+      button.onclick = () =>
+        openWarehouseSheet({ warehouses, warehouseId: Number(button.dataset.wh) }, reload);
+    });
+  } catch (error) {
+    setScreen(emptyState("⚠️", "خطأ", error.message), { tabbar: tabbar() });
+  }
+}
+
+function openWarehouseSheet({ warehouses, warehouseId }, onDone) {
+  const isEdit = Boolean(warehouseId);
+  const current = warehouses.find((w) => w.id === warehouseId);
+  const parents = warehouses.filter((w) => w.id !== warehouseId);
+  const form = el(`<form novalidate>
+    <div class="field"><label class="field__label">الاسم</label>
+      <input class="input" name="name_ar" required value="${escapeHtml(current?.name_ar || "")}" /></div>
+    <div class="field"><label class="field__label">الكود</label>
+      <input class="input num" name="code" value="${escapeHtml(current?.code || "")}"
+        placeholder="اتركه فارغاً للتوليد التلقائي" /></div>
+    <div class="field"><label class="field__label">المخزن الأب</label>
+      <select class="select" name="parent_id">
+        <option value="">مخزن رئيسي</option>
+        ${parents
+          .map(
+            (w) => `<option value="${w.id}" ${w.id === current?.parent_id ? "selected" : ""}>
+              ${escapeHtml(w.name_ar || w.name)}</option>`
+          )
+          .join("")}
+      </select></div>
+    <label class="list__item" style="gap:10px">
+      <input type="checkbox" name="is_group" ${current?.is_group ? "checked" : ""} />
+      <div class="list__main"><div class="list__title">مجموعة</div>
+        <div class="list__meta">المجموعة تُجمَّع فيها أرصدة المخازن التابعة، ولا تُستلم فيها بضاعة</div></div>
+    </label>
+    <button class="btn btn--block" type="submit" style="margin-top:12px">${
+      isEdit ? "حفظ التعديلات" : "حفظ المخزن"
+    }</button>
+    ${
+      isEdit
+        ? `<button class="btn btn--danger btn--block" type="button" data-toggle-active style="margin-top:8px">${
+            current?.is_active ? "إيقاف المخزن" : "تفعيل المخزن"
+          }</button>`
+        : ""
+    }
+  </form>`);
+  const close = openSheet(isEdit ? "تعديل المخزن" : "مخزن جديد", form);
+
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    const data = new FormData(form);
+    const name = String(data.get("name_ar") || "").trim();
+    if (!name) return toast("أدخل اسم المخزن", "error");
+    const body = {
+      name_ar: name,
+      name,
+      code: String(data.get("code") || "").trim(),
+      parent_id: data.get("parent_id") ? Number(data.get("parent_id")) : null,
+      is_group: form.elements.is_group.checked,
+    };
+    if (!body.code) delete body.code;
+    try {
+      if (isEdit) await api(`/inventory/warehouses/${warehouseId}`, { method: "PATCH", body });
+      else await api("/inventory/warehouses", { method: "POST", body });
+      toast(isEdit ? "تم حفظ التعديلات" : "تم إضافة المخزن", "success");
+      close();
+      await onDone();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  };
+
+  form.querySelector("[data-toggle-active]")?.addEventListener("click", async () => {
+    try {
+      if (current?.is_active) {
+        if (!(await confirmDialog("إيقاف المخزن يخفيه من قوائم الاختيار. متابعة؟"))) return;
+        await api(`/inventory/warehouses/${warehouseId}`, { method: "DELETE" });
+        toast("تم إيقاف المخزن", "success");
+      } else {
+        await api(`/inventory/warehouses/${warehouseId}`, { method: "PATCH", body: { is_active: true } });
+        toast("تم تفعيل المخزن", "success");
+      }
+      close();
+      await onDone();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  });
+}
+
+async function renderInventoryMovements(tabs, view) {
+  setScreen(spinner(), { appbar: appbar({ title: "حركات المخزون" }), tabbar: tabbar() });
+  try {
+    const lookups = await loadInventoryLookups();
+    const movements = await api("/inventory/movements?limit=200");
+    const itemName = (id) => itemLabel(lookups.items.find((i) => i.id === id)) || `#${id}`;
+    const whName = (id) => {
+      const w = lookups.warehouses.find((x) => x.id === id);
+      return w ? w.name_ar || w.name : `#${id}`;
+    };
+    const rows = movements
+      .map((m) => {
+        const qty = Number(m.quantity);
+        return `<li><div class="list__item">
+        <div class="list__main">
+          <div class="list__title">${escapeHtml(itemName(m.item_id))}</div>
+          <div class="list__meta">${escapeHtml(MOVEMENT_KIND_LABELS[m.kind] || m.kind)}
+            · ${escapeHtml(whName(m.warehouse_id))} · ${date(m.movement_date)}
+            ${m.reference ? ` · ${escapeHtml(m.reference)}` : ""}</div>
+        </div>
+        <div class="list__value num" style="color:${qty < 0 ? "var(--danger-fg)" : "var(--ok-fg)"}">
+          ${qty > 0 ? "+" : ""}${qty.toLocaleString("en-US")}</div></div></li>`;
+      })
+      .join("");
+    setScreen(
+      el(`<div>
+        ${subTabs("inv", tabs, view)}
+        <div class="card card--flush">
+          ${movements.length ? `<ul class="list">${rows}</ul>`
+            : emptyState("⇄", "لا توجد حركات", "سجّل استلاماً أو صرفاً ليظهر هنا")}
+        </div>
+        ${store.can("stock.manage")
+          ? `<div class="action-bar"><button class="btn" data-move>⇄ حركة جديدة</button></div>`
+          : ""}
+      </div>`),
+      { appbar: appbar({ title: "حركات المخزون" }), tabbar: tabbar() }
+    );
+    document.querySelector("[data-move]")?.addEventListener("click", () =>
+      openMovementSheet(lookups, async () => {
+        refreshInventoryLookups();
+        await renderInventoryMovements(tabs, view);
+      })
     );
   } catch (error) {
     setScreen(emptyState("⚠️", "خطأ", error.message), { tabbar: tabbar() });
   }
+}
+
+/* One sheet for all five movement kinds; the kind decides which fields show, so
+   a transfer never offers a target warehouse in the source's place and a stock
+   count asks for the counted quantity rather than a delta. */
+function openMovementSheet(lookups, onDone = () => renderInventory()) {
+  const items = lookups.items.filter((i) => i.track_inventory);
+  // «هالك المخزن» is created by the server for write-offs; it is a valid
+  // destination for a damage entry but a misleading default for anything else,
+  // so it sorts last and is only preselected when the item has no default.
+  const DAMAGE_CODE = "DMG";
+  const warehouses = lookups.warehouses
+    .filter((w) => !w.is_group)
+    .sort((a, b) => Number(a.code === DAMAGE_CODE) - Number(b.code === DAMAGE_CODE));
+  if (!items.length) return toast("أضف صنفاً يتابع المخزون أولاً", "error");
+  if (!warehouses.length) return toast("أضف مخزناً أولاً", "error");
+
+  const kinds = [
+    { key: "receive", label: "استلام" },
+    { key: "issue", label: "صرف" },
+    { key: "transfer", label: "تحويل بين مخزنين" },
+    { key: "damage", label: "هالك" },
+    { key: "count", label: "جرد وتسوية" },
+  ];
+
+  const itemOptions = items
+    .map(
+      (i) =>
+        `<option value="${i.id}">${escapeHtml(itemLabel(i))}${i.code ? ` — ${escapeHtml(i.code)}` : ""}</option>`
+    )
+    .join("");
+  const whOptions = warehouses
+    .map((w) => `<option value="${w.id}">${escapeHtml(w.name_ar || w.name)}</option>`)
+    .join("");
+
+  const form = el(`<form novalidate>
+    <div class="field"><label class="field__label">نوع الحركة</label>
+      <select class="select" name="kind">
+        ${kinds.map((k) => `<option value="${k.key}">${k.label}</option>`).join("")}
+      </select></div>
+    <div class="field"><label class="field__label">الصنف</label>
+      <select class="select" name="item_id">${itemOptions}</select></div>
+    <div class="field" data-field="warehouse"><label class="field__label">المخزن</label>
+      <select class="select" name="warehouse_id">${whOptions}</select></div>
+    <div class="field" data-field="to_warehouse" hidden><label class="field__label">إلى مخزن</label>
+      <select class="select" name="to_warehouse_id">${whOptions}</select></div>
+    <div class="field"><label class="field__label" data-quantity-label>الكمية</label>
+      <input class="input num" name="quantity" inputmode="decimal" required /></div>
+    <div class="field" data-field="unit_cost" hidden><label class="field__label">تكلفة الوحدة</label>
+      <input class="input num" name="unit_cost" inputmode="decimal" value="0" /></div>
+    <div class="field"><label class="field__label">التاريخ</label>
+      <input class="input" type="date" name="movement_date" value="${today()}" required /></div>
+    <div class="field" data-field="reference"><label class="field__label">المرجع</label>
+      <input class="input" name="reference" placeholder="رقم إذن أو فاتورة" /></div>
+    <div class="field" data-field="notes"><label class="field__label">ملاحظات / سبب</label>
+      <input class="input" name="notes" /></div>
+    <button class="btn btn--block" type="submit" style="margin-top:12px">تسجيل الحركة</button>
+  </form>`);
+
+  const close = openSheet("تسجيل حركة مخزون", form);
+  const kindSelect = form.elements.kind;
+
+  const syncFields = () => {
+    const kind = kindSelect.value;
+    const show = (name, visible) => {
+      const node = form.querySelector(`[data-field="${name}"]`);
+      if (node) node.hidden = !visible;
+    };
+    show("warehouse", kind !== "transfer");
+    show("to_warehouse", kind === "transfer");
+    show("unit_cost", kind === "receive");
+    show("reference", kind !== "count" && kind !== "damage");
+    show("notes", kind !== "transfer");
+    form.querySelector("[data-quantity-label]").textContent = kind === "count" ? "الكمية المعدودة" : "الكمية";
+    // Seed the target with a different warehouse so a transfer is never
+    // submitted with both sides equal.
+    if (kind === "transfer") {
+      const source = form.elements.warehouse_id;
+      const target = form.elements.to_warehouse_id;
+      if (target.value === source.value) {
+        const other = warehouses.find((w) => String(w.id) !== source.value);
+        if (other) target.value = String(other.id);
+      }
+    }
+  };
+  const syncItemWarehouse = () => {
+    const chosen = items.find((i) => String(i.id) === form.elements.item_id.value);
+    const preferred = chosen?.default_warehouse_id;
+    if (preferred && warehouses.some((w) => w.id === preferred)) {
+      form.elements.warehouse_id.value = String(preferred);
+    }
+  };
+  kindSelect.addEventListener("change", syncFields);
+  form.elements.item_id.addEventListener("change", () => {
+    syncItemWarehouse();
+    syncFields();
+  });
+  form.elements.warehouse_id.addEventListener("change", syncFields);
+  syncItemWarehouse();
+  syncFields();
+
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    const kind = kindSelect.value;
+    const data = new FormData(form);
+    const quantity = Number(data.get("quantity"));
+    if (!Number.isFinite(quantity) || quantity <= 0) return toast("أدخل كمية أكبر من صفر", "error");
+    const movementDate = String(data.get("movement_date") || today());
+    const notes = String(data.get("notes") || "").trim();
+    const reference = String(data.get("reference") || "").trim();
+    const itemId = Number(data.get("item_id"));
+
+    let endpoint;
+    let body;
+    if (kind === "transfer") {
+      const from = Number(data.get("warehouse_id"));
+      const to = Number(data.get("to_warehouse_id"));
+      if (from === to) return toast("اختر مخزنين مختلفين", "error");
+      endpoint = "transfer";
+      body = {
+        item_id: itemId,
+        from_warehouse_id: from,
+        to_warehouse_id: to,
+        quantity,
+        movement_date: movementDate,
+        reference,
+      };
+    } else if (kind === "damage") {
+      endpoint = "damage";
+      body = {
+        item_id: itemId,
+        warehouse_id: Number(data.get("warehouse_id")),
+        quantity,
+        movement_date: movementDate,
+        reason: notes,
+      };
+    } else if (kind === "count") {
+      endpoint = "count";
+      body = {
+        item_id: itemId,
+        warehouse_id: Number(data.get("warehouse_id")),
+        counted_quantity: quantity,
+        movement_date: movementDate,
+        notes,
+      };
+    } else if (kind === "issue") {
+      endpoint = "issue";
+      body = {
+        item_id: itemId,
+        warehouse_id: Number(data.get("warehouse_id")),
+        quantity,
+        movement_date: movementDate,
+        reference,
+        notes,
+      };
+    } else {
+      endpoint = "receive";
+      body = {
+        item_id: itemId,
+        warehouse_id: Number(data.get("warehouse_id")),
+        quantity,
+        unit_cost: Number(data.get("unit_cost") || 0),
+        movement_date: movementDate,
+        reference,
+        notes,
+      };
+    }
+
+    try {
+      await api(`/inventory/movements/${endpoint}`, {
+        method: "POST",
+        body,
+        headers: { "Idempotency-Key": idempotencyKey("mov", { endpoint, ...body }) },
+      });
+      toast("تم تسجيل الحركة", "success");
+      close();
+      await onDone();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  };
 }
 
 // ------------------------------------------------- ledger (chart of accounts)
@@ -2579,7 +3171,7 @@ function openMenu() {
   document.querySelectorAll("[data-company]").forEach((button) => {
     button.onclick = () => {
       store.companyId = Number(button.dataset.company);
-      store.cache = { accounts: null, contacts: null };
+      store.cache = { accounts: null, contacts: null, settings: null, inventory: null };
       close();
       location.hash = "#/dashboard";
       route();

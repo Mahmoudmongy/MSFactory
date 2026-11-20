@@ -587,7 +587,11 @@ class InvoiceService:
             item = self.inventory.items.get(line.item_id)
             if not item.track_inventory:
                 continue
-            warehouse_id = self.inventory.resolve_warehouse(item, line.warehouse_id)
+            # A sale must name a warehouse that actually holds the goods; guessing
+            # one would post the issue out of an empty store and drive it negative.
+            warehouse_id = self.inventory.resolve_warehouse(
+                item, line.warehouse_id, require_stock=invoice.kind == "sales"
+            )
             quantity = Decimal(str(line.quantity or 0))
             if quantity <= 0:
                 continue
