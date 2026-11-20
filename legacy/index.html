@@ -48,7 +48,10 @@
   }
   window.__showFactoryBootError = showFactoryBootError;
   window.addEventListener('error', function(event) {
-    showFactoryBootError('حدث خطأ أثناء تشغيل البرنامج', event.message || event.error?.message || 'JavaScript error');
+    // Name the file and position: "Invalid or unexpected token" alone gives no
+    // way to find the broken script.
+    const where = event.filename ? ' @ ' + event.filename.split('/').pop() + ':' + (event.lineno || 0) + ':' + (event.colno || 0) : '';
+    showFactoryBootError('حدث خطأ أثناء تشغيل البرنامج', (event.message || event.error?.message || 'JavaScript error') + where);
   });
   window.addEventListener('unhandledrejection', function(event) {
     const reason = event.reason;
@@ -160,12 +163,15 @@ window.__factoryAuthPromise = (async function bootstrapFactoryApp() {
 </div>
 <div id="toast"></div>
 <div id="pr" style="display:none"></div>
+<script src="./api-config.js"></script>
+<script src="./js/config.js"></script>
 <script src="./js/app.js"></script>
 <script src="./js/preview-ui.js"></script>
 <script src="./js/dashboard.js"></script>
 <script type="module" src="./js/database-first.js"></script>
 <script type="module" src="./js/manager-history.js"></script>
 <script type="module" src="./js/audit-trail.js"></script>
+<script type="module" src="./js/lifecycle.js"></script>
 <script type="module">
   import { installWriteBridge } from './js/write-bridge.js';
   installWriteBridge();
