@@ -1,11 +1,12 @@
 """Contact (customer/supplier) endpoints, including statements."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ...core.permissions import Permission
-from ...db.models import Contact
+from ...db.models import Contact, Invoice, JournalLine, Payment
 from ...db.session import get_session
 from ...repositories.core import ContactRepository
 from ...repositories.documents import InvoiceRepository, JournalRepository, PaymentRepository
@@ -18,10 +19,13 @@ router = APIRouter(prefix="/contacts", tags=["contacts"])
 @router.get("", response_model=list[ContactOut])
 def list_contacts(
     kind: str | None = None,
+    include_inactive: bool = False,
     principal: Principal = Depends(require(Permission.CONTACT_VIEW)),
     db: Session = Depends(get_session),
 ):
-    return ContactRepository(db, principal.company_id).list(kind=kind)
+    return ContactRepository(db, principal.company_id).list(
+        kind=kind, include_inactive=include_inactive
+    )
 
 
 @router.post("", response_model=ContactOut, status_code=status.HTTP_201_CREATED)
@@ -89,3 +93,44 @@ def contact_statement(
             for p in payments
         ],
     }
+
+
+@router.delete("/{contact_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_contact(
+    contact_id: int,
+    principal: Principal = Depends(require(Permission.CONTACT_MANAGE)),
+    db: Session = Depends(get_session),
+):
+    """Delete a contact that never transacted; otherwise ask for deactivation."""
+    contact = ContactRepository(db, principal.company_id).get(contact_id)
+    counts = {
+        "invoices": db.scalar(
+            select(func.count())
+            .select_from(Invoice)
+            .where(Invoice.contact_id == contact.id, Invoice.company_id == principal.company_id)
+        ),
+        "payments": db.scalar(
+            select(func.count())
+            .select_from(Payment)
+            .where(Payment.contact_id == contact.id, Payment.company_id == principal.company_id)
+        ),
+        "entries": db.scalar(
+            select(func.count())
+            .select_from(JournalLine)
+            .where(
+                JournalLine.contact_id == contact.id,
+                JournalLine.company_id == principal.company_id,
+            )
+        ),
+    }
+    if any(counts.values()):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "contact_in_use",
+                "message": "الطرف له حركات مسجلة؛ لا يمكن حذفه. أوقفه بدلًا من ذلك.",
+                **{k: int(v or 0) for k, v in counts.items()},
+            },
+        )
+    db.delete(contact)
+    db.commit()

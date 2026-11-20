@@ -104,13 +104,19 @@ class ApiError extends Error {
 
 let refreshing = null;
 
+/* Where the API lives. Served by FastAPI this is the relative path; on a static
+   host the backend is elsewhere, so the deploy supplies an absolute base. */
+const API_BASE =
+  (typeof window !== "undefined" && window.MSFACTORY_CONFIG && window.MSFACTORY_CONFIG.apiBase) ||
+  "/api/v1";
+
 async function api(path, { method = "GET", body, headers = {}, raw = false } = {}) {
   const requestHeaders = { ...headers };
   if (body !== undefined) requestHeaders["Content-Type"] = "application/json";
   if (store.accessToken) requestHeaders.Authorization = `Bearer ${store.accessToken}`;
   if (store.companyId) requestHeaders["X-Company-Id"] = String(store.companyId);
 
-  const response = await fetch(`/api/v1${path}`, {
+  const response = await fetch(`${API_BASE}${path}`, {
     method,
     headers: requestHeaders,
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -120,7 +126,7 @@ async function api(path, { method = "GET", body, headers = {}, raw = false } = {
   if (response.status === 401 && store.session?.refresh_token && !path.startsWith("/auth/")) {
     refreshing =
       refreshing ||
-      fetch("/api/v1/auth/refresh", {
+      fetch(`${API_BASE}/auth/refresh`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ refresh_token: store.session.refresh_token }),
@@ -1945,7 +1951,7 @@ function reportFilterBar(spec) {
 
 async function downloadReport(key, params, label) {
   const query = new URLSearchParams(params).toString();
-  const response = await fetch(`/api/v1/reports/${key}/export.xlsx${query ? `?${query}` : ""}`, {
+  const response = await fetch(`${API_BASE}/reports/${key}/export.xlsx${query ? `?${query}` : ""}`, {
     headers: {
       Authorization: `Bearer ${store.accessToken}`,
       "X-Company-Id": String(store.companyId),

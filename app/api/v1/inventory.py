@@ -5,11 +5,12 @@ move stock without being able to rename the chart of accounts.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ...core.permissions import Permission
-from ...db.models import ItemGroup, UnitOfMeasure
+from ...db.models import ItemGroup, StockMovement, UnitOfMeasure
 from ...db.session import get_session
 from ...repositories.inventory import ItemRepository, UnitRepository, WarehouseRepository
 from ...services.inventory import InventoryService
@@ -241,6 +242,49 @@ def update_warehouse(
     )
     db.commit()
     return warehouse
+
+
+@router.delete("/warehouses/{warehouse_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_warehouse(
+    warehouse_id: int,
+    principal: Principal = Depends(require(Permission.WAREHOUSE_MANAGE)),
+    db: Session = Depends(get_session),
+):
+    """Delete an empty warehouse; refuse once stock has moved through it.
+
+    Movements point at the warehouse by id, so removing one that holds history
+    would break every past row. Deactivating keeps the history intact and hides
+    the warehouse from the pickers.
+    """
+    service = _service(principal, db)
+    warehouse = service.warehouses.get(warehouse_id)
+    if service.warehouses.children_of(warehouse_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "warehouse_has_children",
+                "message": "المخزن يحتوي مخازن فرعية؛ احذف أو انقل الفرعية أولًا.",
+            },
+        )
+    used = db.scalar(
+        select(func.count())
+        .select_from(StockMovement)
+        .where(
+            StockMovement.warehouse_id == warehouse.id,
+            StockMovement.company_id == principal.company_id,
+        )
+    )
+    if used:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "warehouse_in_use",
+                "message": f"المخزن عليه {used} حركة؛ لا يمكن حذفه. أوقفه بدلًا من ذلك.",
+                "movements": int(used),
+            },
+        )
+    db.delete(warehouse)
+    db.commit()
 
 
 # ------------------------------------------------------------------- stock

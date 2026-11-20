@@ -79,6 +79,7 @@ class AccountUpdate(BaseModel):
     name_ar: str | None = None
     description: str | None = None
     is_group: bool | None = None
+    is_active: bool | None = None
     currency: str | None = None
     parent_id: int | None = None
 
@@ -452,6 +453,7 @@ class WarehouseUpdate(BaseModel):
     kind: str | None = Field(default=None, max_length=20)
     address: str | None = None
     notes: str | None = None
+    is_active: bool | None = None
 
 
 class WarehouseOut(ORMModel):

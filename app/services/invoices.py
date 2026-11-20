@@ -292,6 +292,8 @@ class InvoiceService:
             raise ValidationError("Invoice needs at least one line")
 
         contact = self.contacts.get(contact_id)
+        if not contact.is_active:
+            raise ValidationError("هذا الطرف موقوف؛ لا يمكن إصدار مستند جديد له")
         computed = [
             compute_line(
                 line.get("quantity", 1),

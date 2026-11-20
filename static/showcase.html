@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
+  <script src="/api-config.js"></script>
+  <script src="/static/config.js"></script>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>MS-Factory — عرض تجريبي</title>
@@ -138,7 +140,8 @@
     button.disabled = true;
     message.textContent = "… جارٍ الدخول";
     try {
-      const response = await fetch("/api/v1/auth/login", {
+      const apiBase = window.MSFACTORY_CONFIG?.apiBase || "/api/v1";
+      const response = await fetch(`${apiBase}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: DEMO.email, password: DEMO.password }),

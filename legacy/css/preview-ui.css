@@ -196,7 +196,7 @@ table.l tbody tr:hover{background:color-mix(in srgb,var(--pr2) 45%,var(--card))}
 #sb .sb-nav-scroll>a.factory-nav-link{font-weight:700}
 #sb .sb-nav-scroll>a.factory-nav-link:hover{background:#ffffff10;color:#fff}
 #sb .sb-nav-scroll>a.factory-nav-link.on{background:color-mix(in srgb,var(--pr) 26%,var(--side-base));color:#fff;border-inline-start-color:var(--pr)!important;box-shadow:none}
-#sb .sb-nav-scroll>a.factory-nav-link .nav-ico{width:21px;height:21px;flex:0 0 21px;color:var(--icon-color,#8fe0d4);stroke:currentColor;opacity:.96}
+#sb .sb-nav-scroll>a.factory-nav-link .nav-ico{width:21px;height:21px;flex:0 0 21px;color:color-mix(in srgb,var(--icon-color,#8fe0d4) calc(100% - var(--icon-lift,0%)),#fff);stroke:currentColor;opacity:.96}
 #sb .sb-nav-scroll>a.factory-nav-link.on .nav-ico{color:#8fe0d4}
 #sb.icons-only .sb-nav-scroll>a.factory-nav-link{justify-content:center;padding-inline:5px}
 #sb.icons-only .sb-nav-scroll>a.factory-nav-link .factory-nav-label{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}

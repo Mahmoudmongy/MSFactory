@@ -90,6 +90,13 @@ class WarehouseRepository:
         self.db.flush()
         return warehouse
 
+    def children_of(self, warehouse_id: int) -> list[Warehouse]:
+        """Direct children only — used to block deleting a parent node."""
+        stmt = scoped(
+            select(Warehouse).where(Warehouse.parent_id == warehouse_id), Warehouse, self.company_id
+        )
+        return list(self.db.scalars(stmt))
+
     def descendant_ids(self, warehouse_id: int) -> list[int]:
         """This warehouse plus every warehouse beneath it, at any depth."""
         children: dict[int | None, list[int]] = {}

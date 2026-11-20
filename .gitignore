@@ -15,3 +15,6 @@ venv/
 # Local visual-preview gallery (screenshots are not source)
 preview/
 .agent_tmp/
+
+# Static bundle produced by scripts/build_static.sh
+dist/

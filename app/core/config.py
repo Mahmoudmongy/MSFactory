@@ -41,11 +41,18 @@ class Settings(BaseSettings):
     redis_url: str = "redis://127.0.0.1:6379/0"
 
     # CORS
+    # Comma-separated origins. ``*`` allows any, which browsers refuse to
+    # combine with credentials; when the frontend is hosted separately (a
+    # static host pointing here) list its origin explicitly.
     cors_origins: str = "*"
 
     # Rate limiting
     rate_limit_per_minute: int = 120
     login_rate_limit_per_minute: int = 10
+    # Take the client address from CF-Connecting-IP / X-Forwarded-For instead of
+    # the socket peer. Only correct when a trusted proxy sits in front: a client
+    # that reaches the app directly can forge those headers and dodge the limit.
+    trust_proxy_headers: bool = False
 
     @property
     def cors_origin_list(self) -> list[str]:

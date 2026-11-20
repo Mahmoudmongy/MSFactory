@@ -222,6 +222,8 @@ class InventoryService:
         for key in ("name_ar", "kind", "address", "notes"):
             if fields.get(key) is not None:
                 setattr(warehouse, key, fields[key])
+        if fields.get("is_active") is not None:
+            warehouse.is_active = bool(fields["is_active"])
         if "parent_id" in fields:
             warehouse.parent_id = fields["parent_id"]
         self.db.flush()
