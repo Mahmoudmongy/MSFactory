@@ -135,3 +135,90 @@ def test_voucher_entry_points_back_at_the_voucher(client):
     linked = [e for e in entries if e["source_type"] == "payment"]
     assert linked, "the voucher should have posted an entry"
     assert linked[0]["source_id"] == payment["id"]
+
+
+# --------------------------------------------------- no general accounts (46)
+
+
+def _post(client, token, **body):
+    return client.post("/api/v1/accounts", headers=auth(token), json=body)
+
+
+def test_a_group_account_cannot_be_created(client):
+    """The chart's headings are seeded; a user must not add another one."""
+    token = register(client, email="grp@acme.eg")
+    codes = accounts_by_code(client, token)
+    response = _post(
+        client, token,
+        code="1090", name="أصول أخرى", name_ar="أصول أخرى",
+        type="asset", parent_id=codes["1000"]["id"], is_group=True,
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "group_account_not_allowed"
+
+
+def test_an_account_without_a_parent_cannot_be_created(client):
+    """A rootless account is the "general account" that wrecks the chart."""
+    token = register(client, email="rootless@acme.eg")
+    response = _post(
+        client, token, code="1050", name="حساب عام", name_ar="حساب عام", type="asset",
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "parent_required"
+
+
+def test_an_account_cannot_hang_off_another_types_parent(client):
+    """Filing an expense under assets breaks every report that sums by type."""
+    token = register(client, email="mismatch@acme.eg")
+    codes = accounts_by_code(client, token)
+    response = _post(
+        client, token,
+        code="1091", name="مصروف", name_ar="مصروف",
+        type="expense", parent_id=codes["1000"]["id"],
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "type_mismatch"
+
+
+def test_an_account_code_must_stay_inside_its_parents_branch(client):
+    token = register(client, email="branch@acme.eg")
+    codes = accounts_by_code(client, token)
+    response = _post(
+        client, token,
+        code="9000", name="بعيد", name_ar="بعيد",
+        type="asset", parent_id=codes["1020"]["id"],
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "code_outside_parent"
+
+
+def test_a_duplicate_code_is_refused(client):
+    token = register(client, email="dup@acme.eg")
+    codes = accounts_by_code(client, token)
+    response = _post(
+        client, token,
+        code="1021", name="بنك", name_ar="بنك", type="asset", parent_id=codes["1020"]["id"],
+    )
+    assert response.status_code == 201
+    again = _post(
+        client, token,
+        code="1021", name="بنك تاني", name_ar="بنك تاني",
+        type="asset", parent_id=codes["1020"]["id"],
+    )
+    assert again.status_code == 409
+    assert again.json()["detail"]["code"] == "duplicate_code"
+
+
+def test_a_leaf_account_cannot_be_promoted_to_a_group(client):
+    """A PATCH must not be a back door around the check on POST."""
+    token = register(client, email="promote@acme.eg")
+    codes = accounts_by_code(client, token)
+    created = _post(
+        client, token,
+        code="1021", name="بنك", name_ar="بنك", type="asset", parent_id=codes["1020"]["id"],
+    ).json()
+    response = client.patch(
+        f"/api/v1/accounts/{created['id']}", headers=auth(token), json={"is_group": True}
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "group_account_not_allowed"

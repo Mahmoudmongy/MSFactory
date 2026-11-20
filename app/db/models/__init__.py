@@ -17,6 +17,13 @@ from .accounting import (
     Sequence,
 )
 from .identity import Company, CompanySetting, Membership, RefreshToken, User
+from .imports import (
+    IMPORT_ENTITIES,
+    IMPORT_SOURCES,
+    IMPORT_STATUSES,
+    ImportJob,
+    ImportMapping,
+)
 from .inventory import (
     DAMAGED_CODE,
     INBOUND_KINDS,
@@ -62,14 +69,17 @@ __all__ = [
     "CONTACT_KINDS",
     "DAMAGED_CODE",
     "DEBIT_NORMAL_TYPES",
+    "IMPORT_ENTITIES",
+    "IMPORT_SOURCES",
+    "IMPORT_STATUSES",
     "INBOUND_KINDS",
     "INVENTORY_CODE",
     "INVOICE_KINDS",
     "INVOICE_STATUSES",
-    "PAYMENT_KINDS",
-    "RETURN_KINDS",
     "ITEM_TYPES",
     "MOVEMENT_KINDS",
+    "PAYMENT_KINDS",
+    "RETURN_KINDS",
     "SALES_CODE",
     "VAT_PAYABLE_CODE",
     "VAT_RECEIVABLE_CODE",
@@ -82,6 +92,8 @@ __all__ = [
     "Contact",
     "FiscalPeriod",
     "IdempotencyKey",
+    "ImportJob",
+    "ImportMapping",
     "Invoice",
     "InvoiceLine",
     "Item",

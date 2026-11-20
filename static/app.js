@@ -1112,23 +1112,7 @@ async function renderInvoiceDetail(invoiceId) {
 
     const printButton = view.querySelector("[data-print]");
     if (printButton) {
-      printButton.onclick = async () => {
-        printButton.disabled = true;
-        try {
-          const { path } = await api(`/invoices/${invoiceId}/print-token`, { method: "POST" });
-          // Popup blockers allow window.open only while the click is still
-          // "active"; awaiting the token first can lose that, so the user is
-          // told what happened instead of the button silently doing nothing.
-          const win = window.open(`${API_BASE}${path}`, "_blank");
-          if (!win) {
-            toast("المتصفح منع فتح نافذة الطباعة — اسمح بالنوافذ المنبثقة", "error");
-          }
-        } catch (error) {
-          toast(error.message, "error");
-        } finally {
-          printButton.disabled = false;
-        }
-      };
+      printButton.onclick = () => printDocument(`/invoices/${invoiceId}/print-token`, printButton);
     }
 
     const payButton = view.querySelector("[data-pay]");
@@ -1513,7 +1497,9 @@ async function renderPayments({ autoNew } = {}) {
             · ${payment.kind === "receive" ? "تحصيل" : "صرف"}</div>
         </div>
         <div class="list__value num" style="color:${payment.kind === "receive" ? "var(--ok-fg)" : "var(--danger-fg)"}">
-          ${money(payment.amount)}</div></div></li>`
+          ${money(payment.amount)}</div>
+        <button class="btn btn--ghost btn--sm" data-print-payment="${payment.id}"
+          aria-label="طباعة السند">🖨️</button></div></li>`
       )
       .join("");
 
@@ -1544,9 +1530,33 @@ async function renderPayments({ autoNew } = {}) {
       button.onclick = () => startNewPayment(button.dataset.new, cashAccounts);
     });
 
+    document.querySelectorAll("[data-print-payment]").forEach((button) => {
+      button.onclick = () => printDocument(`/payments/${button.dataset.printPayment}/print-token`);
+    });
+
     if (autoNew === "receive" || autoNew === "spend") startNewPayment(autoNew, cashAccounts);
   } catch (error) {
     setScreen(emptyState("⚠️", "خطأ", error.message), { tabbar: tabbar() });
+  }
+}
+
+/**
+ * Open a printable document in a new tab.
+ *
+ * The token is minted first, which means the click is no longer "active" by the
+ * time window.open runs — browsers then block the popup and the button appears
+ * to do nothing, so the user is told instead.
+ */
+async function printDocument(tokenPath, button) {
+  if (button) button.disabled = true;
+  try {
+    const { path } = await api(tokenPath, { method: "POST" });
+    const win = window.open(`${API_BASE}${path}`, "_blank");
+    if (!win) toast("المتصفح منع فتح نافذة الطباعة — اسمح بالنوافذ المنبثقة", "error");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    if (button) button.disabled = false;
   }
 }
 
@@ -2371,14 +2381,24 @@ async function renderAccounts() {
   }
 }
 
-/** Add a cash or bank account. It is an asset under 1010 (cash) or 1020 (bank),
- * which is what makes it appear on the cash screen and in the cash reports. */
+/**
+ * Add a cash or bank sub-account.
+ *
+ * The sheet only offers leaf accounts under 1010/1020 on purpose: the chart's
+ * root and group headings are fixed, so there is no "general account" option to
+ * pick. The API enforces the same rule, this just keeps the user from meeting
+ * an error they could have avoided.
+ */
 function openAccountSheet(accounts, onDone) {
   const assets = accounts.filter((a) => a.type === "asset");
   const roots = [
     { value: "1010", label: "نقدية" },
     { value: "1020", label: "بنك" },
   ].filter((r) => assets.some((a) => a.code === r.value));
+  if (!roots.length) {
+    toast("دليل الحسابات لم يُهيأ بعد", "error");
+    return;
+  }
   const parentOptions = assets
     .filter((a) => /^10\d\d$/.test(a.code))
     .map((a) => `<option value="${a.id}">${escapeHtml(a.code)} — ${escapeHtml(a.name_ar || a.name)}</option>`)
@@ -2397,6 +2417,9 @@ function openAccountSheet(accounts, onDone) {
       <select class="select" id="acc_parent">
         <option value="">حسب النوع (تلقائي)</option>${parentOptions}
       </select></div>
+    <p style="font-size:.8rem;color:var(--ink-500);margin:0 0 12px">
+      الحسابات الرئيسية والتجميعية ثابتة ولا تُنشأ من هنا — بتضيف حساب فرعي فقط.
+    </p>
     <button class="btn btn--block" type="submit">حفظ الحساب</button>
   </form>`);
 
@@ -2407,13 +2430,16 @@ function openAccountSheet(accounts, onDone) {
     const name = form.querySelector("#acc_name").value.trim();
     if (!name) return toast("أدخل اسم الحساب", "error");
     const chosenParent = form.querySelector("#acc_parent").value;
-    const parent = chosenParent ? Number(chosenParent) : assets.find((a) => a.code === kind)?.id ?? null;
-    // Default the code to the parent's code + a running suffix, so a new bank
-    // account lands next to 1020 as 1021, 1022 … rather than colliding.
+    const parentAccount = chosenParent
+      ? assets.find((a) => a.id === Number(chosenParent))
+      : assets.find((a) => a.code === kind);
+    const parent = parentAccount?.id ?? null;
+    // Number the new account by continuing the parent's own code — 1021, 1022
+    // under 1020 — because the API rejects a code outside the parent's prefix.
     let code = form.querySelector("#acc_code").value.trim();
     if (!code) {
+      const base = Number(parentAccount?.code ?? kind);
       const siblings = assets.filter((a) => a.parent_id === parent);
-      const base = Number(kind) * 1000;
       const used = new Set(siblings.map((a) => Number(a.code)).filter(Number.isFinite));
       let candidate = base + 1;
       while (used.has(candidate)) candidate += 1;
@@ -3177,6 +3203,100 @@ async function renderStatements() {
   );
 }
 
+// ---------------------------------------------------------------- periods
+
+const MONTH_NAMES_AR = [
+  "يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو",
+  "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر",
+];
+
+/**
+ * The month-by-month list of fiscal periods.
+ *
+ * A period row only exists once something is posted into it, so this screen
+ * shows every month of the year — the ones with no row yet read as "مفتوحة" —
+ * because an accountant looks for the month, not for a database record.
+ * Closing freezes posting into that month; the API enforces that and this
+ * screen only drives it.
+ */
+async function renderPeriods() {
+  setScreen(spinner(), { appbar: appbar({ title: "الفترات المحاسبية" }), tabbar: tabbar() });
+  try {
+    const year = Number(hashParam("periods") || new Date().getFullYear());
+    const periods = await api(`/reports/periods?year=${year}`);
+    const byMonth = new Map(periods.map((p) => [p.month, p]));
+    const canManage = store.can("period.manage");
+
+    const rows = MONTH_NAMES_AR.map((label, index) => {
+      const month = index + 1;
+      const period = byMonth.get(month);
+      const closed = period?.status === "closed";
+      const badge = closed
+        ? '<span class="badge badge--danger">مغلقة</span>'
+        : '<span class="badge">مفتوحة</span>';
+      const closedNote = closed && period?.closed_at
+        ? `<div class="list__meta">أُغلقت في ${dateTime(period.closed_at)}</div>`
+        : "";
+      const action = canManage
+        ? `<button class="btn btn--ghost btn--sm" data-toggle-period="${month}"
+             data-closed="${closed}">${closed ? "إعادة فتح" : "إغلاق"}</button>`
+        : "";
+      return `<li><div class="list__item">
+        <div class="list__main">
+          <div class="list__title">${label} ${year} ${badge}</div>
+          ${closedNote}
+        </div>
+        ${action}</div></li>`;
+    }).join("");
+
+    const view = el(`<div>
+      <div class="card">
+        <div class="field"><label class="field__label">السنة</label>
+          <select class="select" id="year">
+            ${[year + 1, year, year - 1, year - 2]
+              .map((y) => `<option value="${y}" ${y === year ? "selected" : ""}>${y}</option>`)
+              .join("")}
+          </select></div>
+      </div>
+      <div class="card card--flush"><ul class="list">${rows}</ul></div>
+      <p style="font-size:.82rem;color:var(--ink-500);padding:0 4px">
+        إغلاق الفترة يمنع تسجيل أي قيد أو فاتورة أو دفعة بتاريخها. أعد فتحها لو احتجت التعديل.
+      </p>
+    </div>`);
+
+    view.querySelector("#year").onchange = (event) => {
+      location.hash = `#/periods?y=${event.target.value}`;
+    };
+
+    view.querySelectorAll("[data-toggle-period]").forEach((button) => {
+      button.onclick = async () => {
+        const month = button.dataset.togglePeriod;
+        const isClosed = button.dataset.closed === "true";
+        const label = `${MONTH_NAMES_AR[Number(month) - 1]} ${year}`;
+        const question = isClosed
+          ? `إعادة فتح ${label}؟ هتقدر تسجّل قيود فيها تاني.`
+          : `إغلاق ${label}؟ مش هتقدر تسجّل قيود أو فواتير بتاريخ الشهر ده.`;
+        if (!(await confirmDialog(question))) return;
+        button.disabled = true;
+        try {
+          await api(`/reports/periods/${year}/${month}/${isClosed ? "reopen" : "close"}`, {
+            method: "POST",
+          });
+          toast(isClosed ? "تمت إعادة فتح الفترة" : "تم إغلاق الفترة", "success");
+          renderPeriods();
+        } catch (error) {
+          toast(error.message, "error");
+          button.disabled = false;
+        }
+      };
+    });
+
+    setScreen(view, { appbar: appbar({ title: "الفترات المحاسبية" }), tabbar: tabbar() });
+  } catch (error) {
+    setScreen(emptyState("⚠️", "خطأ", error.message), { tabbar: tabbar() });
+  }
+}
+
 // ---------------------------------------------------------------- settings
 
 /** Clear the session locally and on the server, then return to the login screen. */
@@ -3613,6 +3733,235 @@ async function renderTimeline() {
   }
 }
 
+
+// ------------------------------------------------------------------ import
+
+/**
+ * Import from Manager.io, in three deliberate steps.
+ *
+ * The key is never stored: it lives in this form's inputs and is sent with each
+ * request. A preview comes before the run so the user sees the damage before it
+ * happens — an import that surprises someone is worse than one that is slow.
+ */
+async function renderImport() {
+  setScreen(spinner(), { appbar: appbar({ title: "استيراد من Manager.io" }), tabbar: tabbar() });
+  try {
+    const jobs = await api("/imports/manager/jobs").catch(() => []);
+
+    const view = el(`<div>
+      <div class="card">
+        <p style="margin:0 0 12px;font-size:.88rem;color:var(--ink-600);line-height:1.6">
+          هنجيب العملاء والموردين والأصناف وأكواد الضريبة والفواتير والمدفوعات من حسابك في
+          Manager.io. الدليل اللي عندنا مش هيتغيّر: كل حساب جديد هيتعلّق تحت بند موجود بالفعل.
+        </p>
+        <div class="field"><label class="field__label">مفتاح الـ API من Manager</label>
+          <input class="input" id="api-key" type="password" autocomplete="off"
+            placeholder="الصقه هنا" />
+          <div class="list__meta" style="margin-top:6px">
+            من Manager: Settings ← Access Tokens ← New Token
+          </div></div>
+        <div class="field"><label class="field__label">الشركة (Business)</label>
+          <select class="select" id="business"><option value="">— اقرأ القائمة أولاً —</option></select>
+        </div>
+        <div class="field"><label class="field__label">رابط السيرفر</label>
+          <input class="input" id="base-url" value="https://cloud.manager.io" />
+          <div class="list__meta" style="margin-top:6px">
+            لو بتستخدم Manager على سيرفر خاص، اكتب رابطه هنا
+          </div></div>
+        <button class="btn btn--ghost btn--block" id="load-businesses" type="button">
+          قراءة الشركات المتاحة
+        </button>
+      </div>
+
+      <div class="section-title">اللي عايز تنقله</div>
+      <div class="card" id="options">
+        ${[
+          ["contacts", "العملاء والموردون"],
+          ["accounts", "الحسابات"],
+          ["tax_codes", "أكواد الضريبة"],
+          ["items", "الأصناف"],
+          ["invoices", "الفواتير"],
+          ["payments", "المدفوعات"],
+        ]
+          .map(
+            ([key, label]) => `<label class="list__item" style="padding:8px 0">
+              <div class="list__main"><div class="list__title">${label}</div></div>
+              <input type="checkbox" data-option="${key}" checked />
+            </label>`
+          )
+          .join("")}
+        <div class="field" style="margin-top:8px">
+          <label class="field__label">من تاريخ (اختياري)</label>
+          <input class="input" id="since" type="date" />
+          <div class="list__meta" style="margin-top:6px">
+            سيبها فاضية تنقل كل التاريخ. حدّد تاريخ تبدأ منه لو عايز سنة واحدة.
+          </div>
+        </div>
+      </div>
+
+      <button class="btn btn--ghost btn--block" id="preview" type="button">
+        معاينة بدون تنفيذ
+      </button>
+      <button class="btn btn--block" id="run" type="button">ابدأ الاستيراد</button>
+      <div id="report"></div>
+
+      <div class="section-title">عمليات سابقة</div>
+      <div class="card card--flush"><ul class="list">${
+        jobs.length
+          ? jobs
+              .map(
+                (job) => `<li class="list__item">
+                  <div class="list__main">
+                    <div class="list__title">
+                      ${job.dry_run ? "معاينة" : "استيراد"}
+                      <span class="badge${job.status === "failed" ? " badge--danger" : ""}">${
+                        job.status === "completed" ? "تم" : job.status === "failed" ? "فشل" : job.status
+                      }</span>
+                    </div>
+                    <div class="list__meta">${dateTime(job.started_at)} · ${escapeHtml(
+                      job.business_name || job.business_key || "—"
+                    )}</div>
+                  </div>
+                </li>`
+              )
+              .join("")
+          : '<li class="list__item"><div class="list__main"><div class="list__meta">مفيش عمليات لسه</div></div></li>'
+      }</ul></div>
+
+      <p style="font-size:.82rem;color:var(--ink-500);padding:0 4px;line-height:1.6">
+        مفتاح الـ API مش بيتخزّن عندنا — بيتبعت مع الطلب بس. تقدر تلغيه من Manager في أي وقت.
+        الاستيراد آمن للتكرار: لو شغّلته تاني، هيتحدّث اللي موجود مش هيتكرر.
+      </p>
+    </div>`);
+
+    const credentials = () => ({
+      api_key: view.querySelector("#api-key").value.trim(),
+      business: view.querySelector("#business").value,
+      base_url: view.querySelector("#base-url").value.trim() || "https://cloud.manager.io",
+    });
+
+    const options = () => {
+      const chosen = {};
+      view.querySelectorAll("[data-option]").forEach((box) => {
+        chosen[box.dataset.option] = box.checked;
+      });
+      const since = view.querySelector("#since").value;
+      if (since) chosen.since = since;
+      return chosen;
+    };
+
+    view.querySelector("#load-businesses").onclick = async (event) => {
+      const button = event.target;
+      if (!credentials().api_key) return toast("اكتب مفتاح الـ API الأول", "error");
+      button.disabled = true;
+      button.textContent = "جارٍ القراءة...";
+      try {
+        const rows = await api("/imports/manager/businesses", {
+          method: "POST",
+          body: credentials(),
+        });
+        view.querySelector("#business").innerHTML = rows.length
+          ? rows
+              .map((row) => `<option value="${escapeHtml(row.key)}">${escapeHtml(row.name)}</option>`)
+              .join("")
+          : '<option value="">— مفيش شركات —</option>';
+        toast(`تم العثور على ${rows.length} شركة`, "success");
+      } catch (error) {
+        toast(error.message, "error");
+      } finally {
+        button.disabled = false;
+        button.textContent = "قراءة الشركات المتاحة";
+      }
+    };
+
+    const submit = async (dryRun) => {
+      const creds = credentials();
+      if (!creds.api_key) return toast("اكتب مفتاح الـ API الأول", "error");
+      if (!creds.business) return toast("اختر الشركة من القائمة", "error");
+
+      const buttons = [view.querySelector("#preview"), view.querySelector("#run")];
+      buttons.forEach((button) => (button.disabled = true));
+      const target = view.querySelector("#report");
+      target.innerHTML =
+        '<div class="card"><div class="list__meta">جارٍ العمل... ممكن ياخد دقيقة</div></div>';
+
+      try {
+        const path = dryRun ? "/imports/manager/preview" : "/imports/manager/run";
+        const result = await api(path, {
+          method: "POST",
+          body: { credentials: creds, options: options() },
+        });
+        target.innerHTML = importReport(result);
+        if (!dryRun) {
+          store.cache.accounts = null;
+          store.cache.contacts = null;
+          store.cache.invoices = null;
+          toast("تم الاستيراد", "success");
+        }
+      } catch (error) {
+        target.innerHTML = "";
+        toast(error.message, "error");
+      } finally {
+        buttons.forEach((button) => (button.disabled = false));
+      }
+    };
+
+    view.querySelector("#preview").onclick = () => submit(true);
+    view.querySelector("#run").onclick = async () => {
+      if (!(await confirmDialog("نبدأ الاستيراد فعلاً؟ الدليل الحالي هيتأثر."))) return;
+      submit(false);
+    };
+
+    setScreen(view, { appbar: appbar({ title: "استيراد من Manager.io" }), tabbar: tabbar() });
+  } catch (error) {
+    setScreen(emptyState("⚠️", "خطأ", error.message), { tabbar: tabbar() });
+  }
+}
+
+/** Render an import report: what was created, and what was refused and why. */
+function importReport(result) {
+  const labels = {
+    contact: "العملاء والموردون",
+    account: "الحسابات",
+    tax_code: "أكواد الضريبة",
+    item: "الأصناف",
+    invoice: "الفواتير",
+    payment: "المدفوعات",
+  };
+  const rows = Object.entries(result.counts || {})
+    .filter(([, counts]) => Object.values(counts).some((value) => value > 0))
+    .map(([entity, counts]) => {
+      const parts = [
+        counts.created ? `جديد ${counts.created}` : "",
+        counts.updated ? `محدّث ${counts.updated}` : "",
+        counts.skipped ? `متخطّى ${counts.skipped}` : "",
+        counts.failed ? `مرفوض ${counts.failed}` : "",
+      ].filter(Boolean);
+      return `<li class="list__item"><div class="list__main">
+        <div class="list__title">${labels[entity] || entity}</div>
+        <div class="list__meta">${parts.join(" · ") || "لا شيء"}</div></div></li>`;
+    })
+    .join("");
+
+  const issues = (result.issues || []).length
+    ? `<div class="section-title">عناصر لم تُستورد</div>
+       <div class="card card--flush"><ul class="list">${result.issues
+         .map(
+           (issue) => `<li class="list__item"><div class="list__main">
+             <div class="list__title">${escapeHtml(issue.label)}</div>
+             <div class="list__meta">${escapeHtml(issue.reason)}</div></div></li>`
+         )
+         .join("")}</ul></div>`
+    : "";
+
+  const title = result.dry_run ? "نتيجة المعاينة (لم يُحفظ شيء)" : "نتيجة الاستيراد";
+  return `<div class="section-title">${title}</div>
+    <div class="card card--flush"><ul class="list">${
+      rows ||
+      '<li class="list__item"><div class="list__main"><div class="list__meta">لا شيء لاستيراده</div></div></li>'
+    }</ul></div>${issues}`;
+}
+
 // ---------------------------------------------------------------- settings
 
 const SETTING_FIELDS = [
@@ -3655,6 +4004,24 @@ async function renderSettings() {
         ).join("")}
         <button class="btn btn--block" type="submit">حفظ الإعدادات</button>
       </form>
+
+      <div class="section-title">الفترات المحاسبية</div>
+      <a class="list__item card" href="#/periods" style="justify-content:space-between">
+        <div class="list__main">
+          <div class="list__title">إغلاق وفتح الشهور</div>
+          <div class="list__meta">اقفل الشهر بعد المراجعة لمنع أي قيود جديدة فيه</div>
+        </div>
+        <span style="color:var(--ink-400)">‹</span>
+      </a>
+
+      <div class="section-title">الانتقال من برنامج آخر</div>
+      <a class="list__item card" href="#/import" style="justify-content:space-between">
+        <div class="list__main">
+          <div class="list__title">استيراد من Manager.io</div>
+          <div class="list__meta">اسحب العملاء والأصناف والفواتير من حسابك في Manager</div>
+        </div>
+        <span style="color:var(--ink-400)">‹</span>
+      </a>
 
       <div class="section-title">أكواد الضريبة</div>
       <div class="card card--flush">
@@ -3841,6 +4208,10 @@ function route() {
       return param === "new" ? renderJournalForm() : renderJournal();
     case "settings":
       return renderSettings();
+    case "periods":
+      return renderPeriods();
+    case "import":
+      return renderImport();
     case "team":
       return renderTeam();
     case "timeline":

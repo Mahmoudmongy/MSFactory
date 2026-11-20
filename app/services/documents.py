@@ -17,7 +17,7 @@ from datetime import date
 from decimal import Decimal
 from html import escape
 
-from ..db.models import Company, Contact, Invoice, InvoiceLine
+from ..db.models import Company, Contact, Invoice, InvoiceLine, Payment
 from ..repositories.core import SettingRepository
 
 # Arabic labels for the kinds the invoice model can hold. A kind that is not
@@ -28,6 +28,197 @@ KIND_LABELS = {
     "sales_return": "مرتجع بيع",
     "purchase_return": "مرتجع شراء",
 }
+
+PAYMENT_KIND_LABELS = {
+    "receive": "سند قبض",
+    "spend": "سند دفع",
+}
+
+# Egyptian vouchers print the amount in words next to the figure, because that
+# is what makes a receipt checkable by eye and impossible to alter with an extra
+# zero. These tables follow the standard Arabic counting rules, where 11–19 take
+# a single form and 21 is "one and twenty".
+_ARABIC_ONES = ["", "واحد", "اثنان", "ثلاثة", "أربعة", "خمسة", "ستة", "سبعة", "ثمانية", "تسعة"]
+_ARABIC_TEENS = [
+    "عشرة", "أحد عشر", "اثنا عشر", "ثلاثة عشر", "أربعة عشر",
+    "خمسة عشر", "ستة عشر", "سبعة عشر", "ثمانية عشر", "تسعة عشر",
+]
+_ARABIC_TENS = ["", "", "عشرون", "ثلاثون", "أربعون", "خمسون", "ستون", "سبعون", "ثمانون", "تسعون"]
+_ARABIC_HUNDREDS = [
+    "", "مئة", "مئتان", "ثلاثمئة", "أربعمئة",
+    "خمسمئة", "ستمئة", "سبعمئة", "ثمانمئة", "تسعمئة",
+]
+# (value, singular, dual, plural) — Arabic counts 1, 2 and 3–10 differently.
+_ARABIC_SCALES = [
+    (1_000_000_000, "مليار", "مليارا", "مليارات"),
+    (1_000_000, "مليون", "مليونا", "ملايين"),
+    (1_000, "ألف", "ألفا", "آلاف"),
+]
+# The currency word changes with the number before it: «جنيه واحد», «جنيهان»,
+# «ثلاثة جنيهات», «أحد عشر جنيهاً», «مئة جنيه». Picking the wrong form is what
+# makes a printed voucher look machine-translated to an Egyptian accountant.
+_CURRENCY_FORMS = {
+    "EGP": {
+        "one": "جنيه مصري واحد",
+        "two": "جنيهان مصريان",
+        "few": "جنيهات مصرية",
+        "many": "جنيهاً مصرياً",
+        "plain": "جنيه مصري",
+    },
+    "USD": {
+        "one": "دولار أمريكي واحد",
+        "two": "دولاران أمريكيان",
+        "few": "دولارات أمريكية",
+        "many": "دولاراً أمريكياً",
+        "plain": "دولار أمريكي",
+    },
+    "EUR": {
+        "one": "يورو واحد",
+        "two": "يوروان",
+        "few": "يوروات",
+        "many": "يورو",
+        "plain": "يورو",
+    },
+    "SAR": {
+        "one": "ريال سعودي واحد",
+        "two": "ريالان سعوديان",
+        "few": "ريالات سعودية",
+        "many": "ريالاً سعودياً",
+        "plain": "ريال سعودي",
+    },
+    "AED": {
+        "one": "درهم إماراتي واحد",
+        "two": "درهمان إماراتيان",
+        "few": "دراهم إماراتية",
+        "many": "درهماً إماراتياً",
+        "plain": "درهم إماراتي",
+    },
+}
+_MINOR_FORMS = {
+    "قرش": {"one": "قرش واحد", "two": "قرشان", "few": "قروش", "many": "قرشاً", "plain": "قرش"},
+    "سنت": {"one": "سنت واحد", "two": "سنتان", "few": "سنتات", "many": "سنتاً", "plain": "سنت"},
+    "هللة": {"one": "هللة واحدة", "two": "هللتان", "few": "هللات", "many": "هللة", "plain": "هللة"},
+    "فلس": {"one": "فلس واحد", "two": "فلسان", "few": "فلوس", "many": "فلساً", "plain": "فلس"},
+}
+
+
+def _three_digits(number: int) -> str:
+    """1–999 in Arabic words, e.g. 342 → «ثلاثمئة واثنان وأربعون»."""
+    hundreds, remainder = divmod(number, 100)
+    parts = []
+    if hundreds:
+        parts.append(_ARABIC_HUNDREDS[hundreds])
+    if remainder:
+        if remainder < 10:
+            parts.append(_ARABIC_ONES[remainder])
+        elif remainder < 20:
+            parts.append(_ARABIC_TEENS[remainder - 10])
+        else:
+            tens, ones = divmod(remainder, 10)
+            if ones:
+                parts.append(_ARABIC_ONES[ones])
+            parts.append(_ARABIC_TENS[tens])
+    return " و".join(parts)
+
+
+def _form_for(number: int) -> str:
+    """Which currency form the final component of ``number`` requires."""
+    if number == 1:
+        return "one"
+    if number == 2:
+        return "two"
+    if 3 <= number <= 10:
+        return "few"
+    if 11 <= number <= 99:
+        return "many"
+    return "plain"
+
+
+def _integer_in_words(number: int) -> tuple[str, str]:
+    """A whole number in Arabic words, plus the currency form it needs.
+
+    The second value follows the *last* component: 15000 ends in a scale word,
+    so the currency stays singular («خمسة عشر ألف جنيه»), while 15 does not and
+    takes the accusative («خمسة عشر جنيهاً»).
+    """
+    if number == 0:
+        return "صفر", "plain"
+    parts = []
+    remainder = number
+    last = "plain"
+    for value, singular, dual, plural in _ARABIC_SCALES:
+        count, remainder = divmod(remainder, value)
+        if not count:
+            continue
+        if count == 1:
+            parts.append(singular)
+        elif count == 2:
+            # Construct state: «ألفا جنيه», not «ألفان جنيه».
+            parts.append(dual)
+        elif count <= 10:
+            parts.append(f"{_three_digits(count)} {plural}")
+        else:
+            parts.append(f"{_three_digits(count)} {singular}")
+        last = "plain"
+    if remainder:
+        parts.append(_three_digits(remainder))
+        last = _form_for(remainder)
+    return " و".join(parts), last
+
+
+def _amount_in_words(value: Decimal, currency: str = "EGP") -> str:
+    """Spell a money amount the way a printed voucher reads it.
+
+    Rounds to two decimals first: a voucher states whole piastres, and a
+    half-piastre would otherwise produce a phrase nobody can reconcile.
+    """
+    major_forms = _CURRENCY_FORMS.get(currency)
+    if major_forms is None:
+        name = currency or "عملة"
+        major_forms = {
+            "one": f"{name} واحد",
+            "two": f"{name}ان",
+            "few": name,
+            "many": name,
+            "plain": name,
+        }
+    minor_name = {"EGP": "قرش"}.get(currency, "سنت")
+    minor_forms = _MINOR_FORMS.get(minor_name, {
+        "one": f"{minor_name} واحد", "two": f"{minor_name}ان",
+        "few": minor_name, "many": minor_name, "plain": minor_name,
+    })
+
+    quantised = Decimal(str(value or 0)).quantize(Decimal("0.01"))
+    negative = quantised < 0
+    quantised = abs(quantised)
+    major = int(quantised)
+    minor = int((quantised - major) * 100)
+
+    if major == 1:
+        phrase = major_forms["one"]
+    elif major == 2:
+        phrase = major_forms["two"]
+    elif major:
+        words, form = _integer_in_words(major)
+        phrase = f"{words} {major_forms[form]}"
+    else:
+        phrase = ""
+
+    if minor:
+        if minor == 1:
+            minor_phrase = minor_forms["one"]
+        elif minor == 2:
+            minor_phrase = minor_forms["two"]
+        else:
+            minor_words, minor_form = _integer_in_words(minor)
+            minor_phrase = f"{minor_words} {minor_forms[minor_form]}"
+        phrase = f"{phrase} و{minor_phrase}" if phrase else minor_phrase
+    if not phrase:
+        phrase = f"صفر {major_forms['plain']}"
+    if negative:
+        phrase = f"سالب {phrase}"
+    return f"فقط {phrase} لا غير"
+
 
 STATUS_LABELS = {
     "draft": "مسودة",
@@ -156,6 +347,23 @@ def _print_styles() -> str:
     margin-top: 14px; padding: 8px 12px; border-radius: 8px; font-size: 13px;
     background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; font-weight: 700;
   }
+  .voucher-amount {
+    margin-top: 18px; padding: 12px 16px; border-radius: 10px;
+    border: 2px solid #0f766e; background: #f0fdfa;
+  }
+  .voucher-amount .label { font-size: 12px; color: #0f766e; font-weight: 700; }
+  .voucher-amount .value { font-size: 26px; font-weight: 800; margin-top: 2px; }
+  .voucher-amount .words {
+    margin-top: 6px; font-size: 13px; color: #134e4a;
+    border-top: 1px dashed #99f6e4; padding-top: 6px;
+  }
+  .signatures {
+    display: flex; gap: 16px; margin-top: 40px; justify-content: space-between;
+  }
+  .sig {
+    flex: 1; border-top: 1px solid #9ca3af; padding-top: 6px;
+    font-size: 12px; color: #4b5563; text-align: center;
+  }
   @media print {
     body { background: #fff; }
     .toolbar { display: none; }
@@ -164,6 +372,78 @@ def _print_styles() -> str:
     tr { break-inside: avoid; }
   }
 """
+
+
+def _page(title: str, inner: str) -> str:
+    """The A4 shell every printable document shares."""
+    return f"""<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>{_text(title)}</title>
+<style>{_print_styles()}</style>
+</head>
+<body>
+  <div class="toolbar">
+    <button type="button" class="primary" onclick="window.print()">🖨️ طباعة / حفظ PDF</button>
+    <button type="button" onclick="window.close()">إغلاق</button>
+  </div>
+  <div class="sheet">
+{inner}
+  </div>
+</body>
+</html>"""
+
+
+def _brand_block(company_name: str, meta: list[str], logo_html: str) -> str:
+    return f"""<div class="brand">
+        {logo_html}
+        <div>
+          <h1>{_text(company_name)}</h1>
+          <p class="meta">{" · ".join(_text(part) for part in meta)}</p>
+        </div>
+      </div>"""
+
+
+def _doc_block(label: str, number: str, badge: str = "") -> str:
+    badge_html = f'<div class="badge">{_text(badge)}</div>' if badge else ""
+    return f"""<div class="doc">
+        <h2>{_text(label)}</h2>
+        <div class="number">{_text(number)}</div>
+        {badge_html}
+      </div>"""
+
+
+def _company_meta(company: Company, settings: dict[str, str]) -> tuple[str, list[str], str]:
+    """Company name, the small print under it, and the logo markup."""
+    name = settings.get("company_name") or company.name
+    meta = []
+    if settings.get("address"):
+        meta.append(settings["address"])
+    if settings.get("phone"):
+        meta.append(settings["phone"])
+    tax_number = settings.get("tax_number") or company.tax_number
+    if tax_number:
+        meta.append(f"الرقم الضريبي: {tax_number}")
+    logo = settings.get("logo", "")
+    logo_html = f'<img src="{_text(logo)}" alt="" />' if logo.startswith("data:image/") else ""
+    return name, meta, logo_html
+
+
+def _contact_details(contact: Contact | None) -> list[str]:
+    if contact is None:
+        return []
+    lines = []
+    if contact.address:
+        lines.append(contact.address)
+    if contact.phone:
+        lines.append(f"هاتف: {contact.phone}")
+    if contact.email:
+        lines.append(contact.email)
+    if contact.tax_number:
+        lines.append(f"الرقم الضريبي: {contact.tax_number}")
+    return lines
 
 
 def _party_block(title: str, name: str, lines: list[str]) -> str:
@@ -187,33 +467,11 @@ def render_invoice(
     formats. It never reads the database, so it cannot leak another company's
     rows.
     """
-    company_name = settings.get("company_name") or company.name
+    company_name, brand_meta, logo_html = _company_meta(company, settings)
+    contact_lines = _contact_details(contact)
     currency = invoice.currency or company.base_currency or ""
     kind_label = KIND_LABELS.get(invoice.kind, invoice.kind)
     status_label = STATUS_LABELS.get(invoice.status, invoice.status)
-
-    brand_meta = []
-    if settings.get("address"):
-        brand_meta.append(settings["address"])
-    if settings.get("phone"):
-        brand_meta.append(settings["phone"])
-    tax_number = settings.get("tax_number") or company.tax_number
-    if tax_number:
-        brand_meta.append(f"الرقم الضريبي: {tax_number}")
-
-    logo = settings.get("logo", "")
-    logo_html = f'<img src="{_text(logo)}" alt="" />' if logo.startswith("data:image/") else ""
-
-    contact_lines = []
-    if contact is not None:
-        if contact.address:
-            contact_lines.append(contact.address)
-        if contact.phone:
-            contact_lines.append(f"هاتف: {contact.phone}")
-        if contact.email:
-            contact_lines.append(contact.email)
-        if contact.tax_number:
-            contact_lines.append(f"الرقم الضريبي: {contact.tax_number}")
 
     rows = []
     for index, line in enumerate(invoice.lines, start=1):
@@ -267,33 +525,11 @@ def render_invoice(
     )
     footer = settings.get("invoice_footer", "")
 
-    return f"""<!DOCTYPE html>
-<html lang="ar" dir="rtl">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>{_text(kind_label)} {_text(invoice.number)}</title>
-<style>{_print_styles()}</style>
-</head>
-<body>
-  <div class="toolbar">
-    <button type="button" class="primary" onclick="window.print()">🖨️ طباعة / حفظ PDF</button>
-    <button type="button" onclick="window.close()">إغلاق</button>
-  </div>
-  <div class="sheet">
-    <div class="head">
-      <div class="brand">
-        {logo_html}
-        <div>
-          <h1>{_text(company_name)}</h1>
-          <p class="meta">{" · ".join(_text(part) for part in brand_meta)}</p>
-        </div>
-      </div>
-      <div class="doc">
-        <h2>{_text(kind_label)}</h2>
-        <div class="number">{_text(invoice.number)}</div>
-        <div class="badge">{_text(status_label)}</div>
-      </div>
+    return _page(
+        f"{kind_label} {invoice.number}",
+        f"""    <div class="head">
+      {_brand_block(company_name, brand_meta, logo_html)}
+      {_doc_block(kind_label, invoice.number, status_label)}
     </div>
 
     {void_html}
@@ -330,14 +566,140 @@ def render_invoice(
     </div>
 
     {notes_html}
-    {f'<div class="footer">{_text(footer)}</div>' if footer else ""}
-  </div>
-</body>
-</html>"""
+    {f'<div class="footer">{_text(footer)}</div>' if footer else ""}""",
+    )
 
 
 def invoice_title(invoice: Invoice) -> str:
     """A filename-safe description used for the browser's suggested name."""
     kind = KIND_LABELS.get(invoice.kind, invoice.kind)
     safe_number = "".join(ch for ch in invoice.number if ch.isalnum() or ch in "-_")
+    return f"{kind}-{safe_number}"
+
+
+def render_payment(
+    payment: Payment,
+    contact: Contact | None,
+    company: Company,
+    settings: dict[str, str],
+    bank_account_name: str = "",
+    invoices: dict[int, tuple[str, date | None]] | None = None,
+) -> str:
+    """Build the printable page for one receipt or payment voucher.
+
+    A voucher is mostly one number, so the page leads with the amount in words
+    next to it: that is what makes a printed receipt checkable at a glance and
+    is how Egyptian vouchers have always been printed.
+
+    ``invoices`` maps invoice id to (number, issue date) for the allocations.
+    It is passed in rather than read here, for the same reason as
+    :func:`render_invoice`: this function must not be able to reach another
+    tenant's rows.
+    """
+    company_name, brand_meta, logo_html = _company_meta(company, settings)
+    contact_lines = _contact_details(contact)
+    currency = company.base_currency or "EGP"
+    kind_label = PAYMENT_KIND_LABELS.get(payment.kind, payment.kind)
+    amount = Decimal(str(payment.amount or 0))
+
+    allocations = list(payment.allocations or [])
+    settled_rows = []
+    for index, allocation in enumerate(allocations, start=1):
+        reference = (invoices or {}).get(allocation.invoice_id, ("—", None))
+        settled_rows.append(
+            f"""<tr>
+          <td class="num">{index}</td>
+          <td>{_text(reference[0])}</td>
+          <td class="num">{_date(reference[1])}</td>
+          <td class="num">{_amount(allocation.amount, currency)}</td>
+        </tr>"""
+        )
+    if not settled_rows:
+        settled_rows.append(
+            '<tr><td colspan="4" style="text-align:center;color:#6b7280">'
+            "غير مخصصة لفواتير — دفعة على الحساب</td></tr>"
+        )
+
+    allocated = sum((Decimal(str(a.amount or 0)) for a in allocations), Decimal("0.00"))
+    on_account = amount - allocated
+
+    totals_rows = [
+        f'<div class="row grand"><span>المبلغ</span>'
+        f'<span class="num">{_amount(amount, currency)}</span></div>',
+    ]
+    if allocated:
+        totals_rows.append(
+            f'<div class="row"><span>مخصص لفواتير</span>'
+            f'<span class="num">{_amount(allocated, currency)}</span></div>'
+        )
+    if on_account:
+        totals_rows.append(
+            f'<div class="row"><span>على الحساب</span>'
+            f'<span class="num">{_amount(on_account, currency)}</span></div>'
+        )
+
+    method_html = (
+        f'<div class="line">الحساب: {_text(bank_account_name)}</div>' if bank_account_name else ""
+    )
+    reference_html = (
+        f'<div class="line">المرجع: {_text(payment.reference)}</div>' if payment.reference else ""
+    )
+    footer = settings.get("invoice_footer", "")
+
+    return _page(
+        f"{kind_label} {payment.number}",
+        f"""    <div class="head">
+      {_brand_block(company_name, brand_meta, logo_html)}
+      {_doc_block(kind_label, payment.number)}
+    </div>
+
+    <div class="parties">
+      {_party_block("من" if payment.kind == "receive" else "إلى", contact.name if contact else "—", contact_lines)}
+      <div class="party">
+        <h3>بيانات السند</h3>
+        <div class="line">التاريخ: {_date(payment.date)}</div>
+        {method_html}
+        {reference_html}
+        <div class="line">العملة: {_text(currency)}</div>
+      </div>
+    </div>
+
+    <div class="voucher-amount">
+      <div class="label">المبلغ</div>
+      <div class="value num">{_amount(amount, currency)}</div>
+      <div class="words">{_text(_amount_in_words(amount, currency))}</div>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th class="num">#</th>
+          <th>الفاتورة</th>
+          <th class="num">تاريخها</th>
+          <th class="num">المبلغ المخصص</th>
+        </tr>
+      </thead>
+      <tbody>
+        {"".join(settled_rows)}
+      </tbody>
+    </table>
+
+    <div class="totals">
+      {"".join(totals_rows)}
+    </div>
+
+    <div class="signatures">
+      <div class="sig"><span>المستلم</span></div>
+      <div class="sig"><span>المحاسب</span></div>
+      <div class="sig"><span>المدير</span></div>
+    </div>
+
+    {f'<div class="footer">{_text(footer)}</div>' if footer else ""}""",
+    )
+
+
+def payment_title(payment: Payment) -> str:
+    """A filename-safe description used for the browser's suggested name."""
+    kind = PAYMENT_KIND_LABELS.get(payment.kind, payment.kind)
+    safe_number = "".join(ch for ch in payment.number if ch.isalnum() or ch in "-_")
     return f"{kind}-{safe_number}"

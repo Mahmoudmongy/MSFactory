@@ -104,6 +104,29 @@ def close_period(
     return {"id": period.id, "year": year, "month": month, "status": "closed"}
 
 
+@router.post("/periods/{year}/{month}/reopen")
+def reopen_period(
+    year: int,
+    month: int,
+    principal: Principal = Depends(require(Permission.PERIOD_MANAGE)),
+    db: Session = Depends(get_session),
+):
+    """Reopen a closed month.
+
+    Closing is a one-click action on a phone, so it must be undoable: without
+    this a mistap would lock the books for good and only a DBA could fix it.
+    """
+    periods = PeriodRepository(db, principal.company_id)
+    period = periods.for_date(date(year, month, 1))
+    if period.status != "closed":
+        raise ConflictError("الفترة مفتوحة بالفعل")
+    period.status = "open"
+    period.closed_at = None
+    period.closed_by_id = None
+    db.commit()
+    return {"id": period.id, "year": year, "month": month, "status": "open"}
+
+
 # ------------------------------------------------- reports that need an id
 
 

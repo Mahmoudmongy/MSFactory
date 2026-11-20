@@ -27,7 +27,12 @@ class TestAccounts:
         created = client.post(
             "/api/v1/accounts",
             headers=auth(token),
-            json={"code": "5799", "name": "مصروف تجريبي", "type": "expense"},
+            json={
+                "code": "5901",
+                "name": "مصروف تجريبي",
+                "type": "expense",
+                "parent_id": _first_account(client, token, "5900")["id"],
+            },
         )
         assert created.status_code == 201, created.text
         account_id = created.json()["id"]
@@ -64,7 +69,12 @@ class TestAccounts:
         created = client.post(
             "/api/v1/accounts",
             headers=auth(token),
-            json={"code": "5798", "name": "مصروف مؤقت", "type": "expense"},
+            json={
+                "code": "5902",
+                "name": "مصروف مؤقت",
+                "type": "expense",
+                "parent_id": _first_account(client, token, "5900")["id"],
+            },
         )
         account_id = created.json()["id"]
         updated = client.patch(

@@ -127,6 +127,7 @@ def _clean_business_tables():
                 "journal_lines, journal_entries, payment_allocations, payments, "
                 "invoice_lines, invoices, contacts, tax_codes, company_settings, sequences, "
                 "fiscal_periods, audit_logs, idempotency_keys, refresh_tokens, memberships, "
+                "import_mappings, import_jobs, "
                 "accounts, companies, users RESTART IDENTITY CASCADE"
             )
         )

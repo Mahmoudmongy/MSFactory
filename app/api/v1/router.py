@@ -10,6 +10,7 @@ from . import (
     bootstrap,
     contacts,
     documents,
+    imports,
     inventory,
     invoices,
     journal,
@@ -29,6 +30,7 @@ api_router.include_router(accounts.router)
 api_router.include_router(audit.router)
 api_router.include_router(contacts.router)
 api_router.include_router(documents.router)
+api_router.include_router(imports.router)
 api_router.include_router(inventory.router)
 api_router.include_router(invoices.router)
 api_router.include_router(production.router)

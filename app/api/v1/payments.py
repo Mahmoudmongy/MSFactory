@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Header, status
 from sqlalchemy.orm import Session
 
 from ...core.permissions import Permission
+from ...core.security import DOCUMENT_TOKEN_MINUTES, create_document_token
 from ...db.session import get_session
 from ...services.payments import PaymentService
 from ..v1.deps import Principal, require
@@ -44,6 +45,26 @@ def create_payment(
         return PaymentOut.model_validate(payment)
 
     return replay_or_execute(db, principal.company_id, idempotency_key, "/payments", run, PaymentOut)
+
+
+@router.post("/{payment_id}/print-token")
+def payment_print_token(
+    payment_id: int,
+    principal: Principal = Depends(require(Permission.PAYMENT_VIEW)),
+    db: Session = Depends(get_session),
+):
+    """Mint a one-document link for a receipt or payment voucher.
+
+    Same reasoning as the invoice link: the access token stays out of the URL,
+    and the returned token opens this one voucher and expires in minutes.
+    """
+    service = PaymentService(db, principal.company_id, principal.user.id)
+    service.payments.get(payment_id)
+    token = create_document_token(principal.user.id, principal.company_id, "payment", payment_id)
+    return {
+        "path": f"/documents/payment/{payment_id}?t={token}",
+        "expires_in": DOCUMENT_TOKEN_MINUTES * 60,
+    }
 
 
 @router.post("/{payment_id}/reverse", status_code=status.HTTP_204_NO_CONTENT)
