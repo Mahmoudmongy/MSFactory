@@ -17,6 +17,10 @@ _hasher = PasswordHasher(
 
 ALGORITHM = "HS256"
 
+# Long enough to open the tab and print, short enough that a leaked link dies
+# before it is useful. A print job is a one-off action, not a session.
+DOCUMENT_TOKEN_MINUTES = 15
+
 
 def hash_password(password: str) -> str:
     return _hasher.hash(password)
@@ -66,3 +70,34 @@ def decode_token(token: str) -> dict | None:
         return jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
     except jwt.PyJWTError:
         return None
+
+
+def create_document_token(user_id: int, company_id: int, document: str, document_id: int) -> str:
+    """A short-lived token that opens exactly one printable document.
+
+    A print URL is opened in a new tab or handed to another device, and putting
+    the access token in a URL leaks it into history, logs and shared links.
+    This token carries only the document it names, expires in minutes, and is
+    rejected by every other endpoint because its ``type`` is not ``access``.
+    """
+    now = datetime.now(UTC)
+    payload = {
+        "sub": str(user_id),
+        "type": "document",
+        "cid": company_id,
+        "doc": document,
+        "did": document_id,
+        "iat": now,
+        "exp": now + timedelta(minutes=DOCUMENT_TOKEN_MINUTES),
+    }
+    return jwt.encode(payload, settings.secret_key, algorithm=ALGORITHM)
+
+
+def decode_document_token(token: str, document: str, document_id: int) -> dict | None:
+    """Verify a print token and that it names this exact document."""
+    payload = decode_token(token)
+    if not payload or payload.get("type") != "document":
+        return None
+    if payload.get("doc") != document or payload.get("did") != document_id:
+        return None
+    return payload

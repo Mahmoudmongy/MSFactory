@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Header, status
 from sqlalchemy.orm import Session
 
 from ...core.permissions import Permission
+from ...core.security import DOCUMENT_TOKEN_MINUTES, create_document_token
 from ...db.session import get_session
 from ...services.invoices import InvoiceService
 from ..v1.deps import Principal, require
@@ -38,6 +39,29 @@ def get_invoice(
     db: Session = Depends(get_session),
 ):
     return InvoiceService(db, principal.company_id, principal.user.id).get(invoice_id)
+
+
+@router.post("/{invoice_id}/print-token")
+def invoice_print_token(
+    invoice_id: int,
+    principal: Principal = Depends(require(Permission.INVOICE_VIEW)),
+    db: Session = Depends(get_session),
+):
+    """Mint a one-document link the browser can open in a new tab.
+
+    The access token stays out of the URL: it is a session credential and a URL
+    ends up in history, logs and anything the user shares. The returned token
+    opens this invoice and nothing else, and expires in minutes.
+    """
+    InvoiceService(db, principal.company_id, principal.user.id).get(invoice_id)
+    token = create_document_token(principal.user.id, principal.company_id, "invoice", invoice_id)
+    # A path, not an absolute URL: when the SPA is hosted on a static domain the
+    # API lives elsewhere, and only the client knows where. It joins this path
+    # onto its own API base.
+    return {
+        "path": f"/documents/invoice/{invoice_id}?t={token}",
+        "expires_in": DOCUMENT_TOKEN_MINUTES * 60,
+    }
 
 
 @router.get("/{invoice_id}/returnable", response_model=list[ReturnableLine])

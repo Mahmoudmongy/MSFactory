@@ -741,7 +741,7 @@ async function openReturnSheet(invoiceId, onDone) {
             <div class="list__meta">متاح ${Number(l.remaining)} من ${Number(l.quantity)} · ${money(l.unit_price)}</div>
           </div>
           <input class="input num" style="max-width:96px" type="number" inputmode="decimal"
-            min="0" max="${Number(l.remaining)}" step="0.01" value="0"
+            min="0" max="${Number(l.remaining)}" step="0.01" placeholder="0"
             data-return-qty="${l.line_id}" aria-label="الكمية المرتجعة" /></li>`
         )
         .join("")}</ul>
@@ -879,11 +879,12 @@ async function renderInvoiceForm({ invoiceId } = {}) {
           </select></div>
         <div class="field"><label class="field__label">المخزن</label>
           <select class="select" data-warehouse>
+            <option value="">— تلقائي —</option>
             ${warehouses
               .map(
                 (w) =>
                   `<option value="${w.id}" ${
-                    prefill?.warehouse_id ? (prefill.warehouse_id === w.id ? "selected" : "") : w.code === "MAIN" ? "selected" : ""
+                    prefill?.warehouse_id && prefill.warehouse_id === w.id ? "selected" : ""
                   }>${escapeHtml(w.name_ar || w.name)}</option>`
               )
               .join("")}
@@ -892,20 +893,21 @@ async function renderInvoiceForm({ invoiceId } = {}) {
         : ""}
       <div class="line-editor__row">
         <div class="field"><label class="field__label">الكمية</label>
-          <input class="input num" data-quantity type="number" step="0.01" min="0" value="${prefill ? Number(prefill.quantity) : 1}" inputmode="decimal" /></div>
+          <input class="input num" data-quantity type="number" step="0.01" min="0" placeholder="1" value="${prefill ? Number(prefill.quantity) : ""}" inputmode="decimal" /></div>
         <div class="field"><label class="field__label">سعر الوحدة</label>
-          <input class="input num" data-unit-price type="number" step="0.01" min="0" value="${prefill ? Number(prefill.unit_price) : 0}" inputmode="decimal" /></div>
+          <input class="input num" data-unit-price type="number" step="0.01" min="0" placeholder="0.00" value="${prefill ? Number(prefill.unit_price) : ""}" inputmode="decimal" /></div>
       </div>
       <div class="line-editor__row">
         <div class="field"><label class="field__label">خصم %</label>
-          <input class="input num" data-discount type="number" step="0.01" min="0" max="100" value="${prefill ? Number(prefill.discount_rate) : 0}" inputmode="decimal" /></div>
+          <input class="input num" data-discount type="number" step="0.01" min="0" max="100" placeholder="0" value="${prefill ? Number(prefill.discount_rate) : ""}" inputmode="decimal" /></div>
         <div class="field"><label class="field__label">ضريبة %</label>
           <select class="select" data-tax-rate>
+            <option value="">${defaultRate ? `— تلقائي ${defaultRate}% —` : "— بدون —"}</option>
             ${taxCodes
               .map(
                 (code) =>
                   `<option value="${Number(code.rate)}" ${
-                    Number(code.rate) === defaultRate ? "selected" : ""
+                    prefill && Number(prefill.tax_rate) === Number(code.rate) ? "selected" : ""
                   }>${escapeHtml(code.name_ar || code.name)}</option>`
               )
               .join("")}
@@ -939,10 +941,17 @@ async function renderInvoiceForm({ invoiceId } = {}) {
       const warehouseId = node.querySelector("[data-warehouse]")?.value || "";
       return {
         description: node.querySelector("[data-description]").value.trim(),
-        quantity: Number(node.querySelector("[data-quantity]").value) || 0,
+        // Empty means one unit — the common case — rather than a zero that
+        // would be rejected on submit for a reason the user cannot see.
+        quantity: Number(node.querySelector("[data-quantity]").value) || 1,
         unit_price: Number(node.querySelector("[data-unit-price]").value) || 0,
         discount_rate: Number(node.querySelector("[data-discount]").value) || 0,
-        tax_rate: Number(node.querySelector("[data-tax-rate]").value) || 0,
+        // An untouched field means "the company default", not "no tax": silently
+        // dropping VAT on an Egyptian invoice would understate the total.
+        tax_rate:
+          node.querySelector("[data-tax-rate]").value === ""
+            ? defaultRate
+            : Number(node.querySelector("[data-tax-rate]").value) || 0,
         // Naming an item is what moves stock; leaving it blank keeps the line
         // as free text that touches no inventory.
         ...(itemId ? { item_id: Number(itemId) } : {}),
@@ -1084,6 +1093,8 @@ async function renderInvoiceDetail(invoiceId) {
       <div id="returns-block"></div>
 
       <div class="row-actions">
+        ${store.can("invoice.view")
+          ? '<button class="btn btn--ghost" data-print>🖨️ طباعة / PDF</button>' : ""}
         ${invoice.status !== "void" && outstanding > 0 && store.can("payment.manage")
           ? '<button class="btn" data-pay>💵 تسجيل دفعة</button>' : ""}
         ${!RETURN_KINDS.includes(invoice.kind) && ["issued", "partially_paid", "paid"].includes(invoice.status) && store.can("invoice.manage")
@@ -1098,6 +1109,27 @@ async function renderInvoiceDetail(invoiceId) {
     view.querySelector("[data-edit]")?.addEventListener("click", () => {
       location.hash = `#/invoices/${invoiceId}/edit`;
     });
+
+    const printButton = view.querySelector("[data-print]");
+    if (printButton) {
+      printButton.onclick = async () => {
+        printButton.disabled = true;
+        try {
+          const { path } = await api(`/invoices/${invoiceId}/print-token`, { method: "POST" });
+          // Popup blockers allow window.open only while the click is still
+          // "active"; awaiting the token first can lose that, so the user is
+          // told what happened instead of the button silently doing nothing.
+          const win = window.open(`${API_BASE}${path}`, "_blank");
+          if (!win) {
+            toast("المتصفح منع فتح نافذة الطباعة — اسمح بالنوافذ المنبثقة", "error");
+          }
+        } catch (error) {
+          toast(error.message, "error");
+        } finally {
+          printButton.disabled = false;
+        }
+      };
+    }
 
     const payButton = view.querySelector("[data-pay]");
     if (payButton) {
@@ -1242,11 +1274,12 @@ async function renderWorkOrderForm() {
         </div>
         <div class="line-editor__row">
           <div class="field"><label class="field__label" for="quantity">الكمية المطلوبة</label>
-            <input class="input num" id="quantity" type="number" step="0.01" min="0.01" value="1" inputmode="decimal" required /></div>
+            <input class="input num" id="quantity" type="number" step="0.01" min="0.01" placeholder="1" inputmode="decimal" required /></div>
           <div class="field"><label class="field__label" for="warehouse">مخزن الاستلام</label>
             <select class="select" id="warehouse">
+              <option value="">— تلقائي (المخزن الرئيسي) —</option>
               ${warehouses
-                .map((w) => `<option value="${w.id}" ${w.code === "FG" ? "selected" : ""}>${escapeHtml(w.name_ar || w.name)}</option>`)
+                .map((w) => `<option value="${w.id}">${escapeHtml(w.name_ar || w.name)}</option>`)
                 .join("")}
             </select></div>
         </div>
@@ -1282,7 +1315,7 @@ async function renderWorkOrderForm() {
               ${items.map((i) => `<option value="${i.id}">${escapeHtml(i.name)}</option>`).join("")}
             </select></div>
           <div class="field"><label class="field__label">الكمية</label>
-            <input class="input num" data-material-qty type="number" step="0.01" min="0" value="1" inputmode="decimal" /></div>
+            <input class="input num" data-material-qty type="number" step="0.01" min="0" placeholder="1" inputmode="decimal" /></div>
         </div>
       </div>`);
       node.querySelector("[data-remove]").onclick = () => node.remove();
@@ -1296,14 +1329,14 @@ async function renderWorkOrderForm() {
       const itemId = Number(view.querySelector("#item").value);
       const materials = [...host.querySelectorAll(".line-editor")].map((node) => ({
         item_id: Number(node.querySelector("[data-material-item]").value),
-        quantity: Number(node.querySelector("[data-material-qty]").value) || 0,
+        quantity: Number(node.querySelector("[data-material-qty]").value) || 1,
       }));
       if (!itemId) return toast("اختر المنتج التام", "error");
       if (!materials.length) return toast("أضف خامة واحدة على الأقل", "error");
 
       const payload = {
         item_id: itemId,
-        quantity: Number(view.querySelector("#quantity").value) || 0,
+        quantity: Number(view.querySelector("#quantity").value) || 1,
         start_date: view.querySelector("#start_date").value,
         due_date: view.querySelector("#due_date").value || null,
         warehouse_id: Number(view.querySelector("#warehouse").value) || null,
@@ -1417,6 +1450,7 @@ function buildPaymentForm({ kind, contactId, amount, cashAccounts, invoiceId, on
       <input class="input" id="date" type="date" value="${today()}" required /></div>
     <div class="field"><label class="field__label" for="account">الحساب</label>
       <select class="select" id="account" required>
+        <option value="">— اختر الحساب —</option>
         ${cashAccounts.map((a) => `<option value="${a.id}">${escapeHtml(a.name_ar || a.name)}</option>`).join("")}
       </select></div>
     <div class="field"><label class="field__label" for="reference">المرجع</label>
@@ -1437,6 +1471,7 @@ function buildPaymentForm({ kind, contactId, amount, cashAccounts, invoiceId, on
       ...(invoiceId ? { invoice_id: Number(invoiceId) } : {}),
     };
     if (!(payload.amount > 0)) return toast("أدخل مبلغاً صحيحاً", "error");
+    if (!payload.bank_account_id) return toast("اختر الحساب الذي دُفعت منه", "error");
 
     button.disabled = true;
     button.textContent = "جارٍ الحفظ...";
@@ -1527,6 +1562,7 @@ function startNewPayment(kind, cashAccounts) {
   const picker = el(`<form novalidate>
     <div class="field"><label class="field__label">${kind === "receive" ? "العميل" : "المورد"}</label>
       <select class="select" id="contact" required>
+        <option value="">— اختر —</option>
         ${options.map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("")}
       </select></div>
     <div class="field"><label class="field__label">المبلغ</label>
@@ -1540,6 +1576,7 @@ function startNewPayment(kind, cashAccounts) {
     const amount = Number(picker.querySelector("#amount").value);
     if (!(amount > 0)) return toast("أدخل مبلغاً صحيحاً", "error");
     const contactId = Number(picker.querySelector("#contact").value);
+    if (!contactId) return toast("اختر العميل أو المورد", "error");
     closePicker();
     let closePayment = () => {};
     closePayment = openSheet(
@@ -1614,7 +1651,7 @@ async function renderContacts() {
         <div class="field"><label class="field__label">الرقم الضريبي</label>
           <input class="input num" id="tax_number" placeholder="اختياري" /></div>
         <div class="field"><label class="field__label">مدة السداد (يوم)</label>
-          <input class="input num" id="terms" type="number" value="30" min="0" inputmode="numeric" /></div>
+          <input class="input num" id="terms" type="number" placeholder="30" min="0" inputmode="numeric" /></div>
         <button class="btn btn--block" type="submit">حفظ</button>
       </form>`);
 
@@ -1941,9 +1978,11 @@ function reportFilterBar(spec) {
   const fields = spec.params
     .map((name) => {
       const type = ["days", "year", "limit", "warehouse_id"].includes(name) ? "number" : "date";
-      const value = name === "limit" ? 'value="50"' : "";
+      // Left blank on purpose: the server applies its own default, and a
+      // prefilled "50" would be sent as if the user had chosen it.
+      const hint = name === "limit" ? 'placeholder="20"' : "";
       return `<div class="field"><label class="field__label">${escapeHtml(REPORT_PARAM_LABELS[name] || name)}</label>
-        <input class="input" type="${type}" data-param="${escapeHtml(name)}" ${value} /></div>`;
+        <input class="input" type="${type}" data-param="${escapeHtml(name)}" ${hint} /></div>`;
     })
     .join("");
   return `<div class="card">${fields}<button class="btn btn--block" type="button" data-run>تشغيل التقرير</button></div>`;
@@ -2145,18 +2184,21 @@ async function renderJournalForm() {
     .filter((a) => !a.is_group)
     .map((a) => `<option value="${a.id}">${escapeHtml(a.code)} — ${escapeHtml(a.name_ar || a.name)}</option>`)
     .join("");
+  // No account is preselected: a balancing entry on the wrong account looks
+  // correct to the balance check and is only caught at audit time.
+  const blankAccount = '<option value="">— اختر الحساب —</option>';
 
   function addLine() {
     const node = el(`<div class="line-editor">
       <div class="line-editor__head"><span>سطر</span>
         <button type="button" class="btn btn--ghost btn--sm" data-remove>حذف</button></div>
       <div class="field"><label class="field__label">الحساب</label>
-        <select class="select" data-account>${accountOptions}</select></div>
+        <select class="select" data-account>${blankAccount}${accountOptions}</select></div>
       <div class="line-editor__row">
         <div class="field"><label class="field__label">مدين</label>
-          <input class="input num" data-debit type="number" step="0.01" min="0" value="0" inputmode="decimal" /></div>
+          <input class="input num" data-debit type="number" step="0.01" min="0" placeholder="0.00" inputmode="decimal" /></div>
         <div class="field"><label class="field__label">دائن</label>
-          <input class="input num" data-credit type="number" step="0.01" min="0" value="0" inputmode="decimal" /></div>
+          <input class="input num" data-credit type="number" step="0.01" min="0" placeholder="0.00" inputmode="decimal" /></div>
       </div>
       <div class="field"><label class="field__label">البيان</label>
         <input class="input" data-description placeholder="اختياري" /></div>
@@ -2199,6 +2241,8 @@ async function renderJournalForm() {
 
   view.onsubmit = async (event) => {
     event.preventDefault();
+    const lines = collect();
+    if (lines.some((line) => !line.account_id)) return toast("اختر حساباً لكل سطر", "error");
     const submit = view.querySelector("button[type=submit]");
     submit.disabled = true;
     submit.textContent = "جارٍ الترحيل...";
@@ -2209,7 +2253,7 @@ async function renderJournalForm() {
           entry_date: view.querySelector("#entry_date").value,
           memo: view.querySelector("#memo").value.trim(),
           reference: view.querySelector("#reference").value.trim(),
-          lines: collect(),
+          lines,
         },
       });
       toast("تم ترحيل القيد", "success");
@@ -2606,11 +2650,11 @@ function openItemSheet({ units, warehouses, itemId }, onDone) {
           .join("")}
       </select></div>
     <div class="field"><label class="field__label">سعر الشراء</label>
-      <input class="input num" name="purchase_price" inputmode="decimal" value="0" /></div>
+      <input class="input num" name="purchase_price" inputmode="decimal" placeholder="0.00" /></div>
     <div class="field"><label class="field__label">سعر البيع</label>
-      <input class="input num" name="sale_price" inputmode="decimal" value="0" /></div>
+      <input class="input num" name="sale_price" inputmode="decimal" placeholder="0.00" /></div>
     <div class="field"><label class="field__label">حد إعادة الطلب</label>
-      <input class="input num" name="reorder_level" inputmode="decimal" value="0" /></div>
+      <input class="input num" name="reorder_level" inputmode="decimal" placeholder="0" /></div>
     <label class="list__item" style="gap:10px">
       <input type="checkbox" name="track_inventory" checked />
       <div class="list__main"><div class="list__title">يتابع المخزون</div>
@@ -2893,6 +2937,10 @@ function openMovementSheet(lookups, onDone = () => renderInventory()) {
   const whOptions = warehouses
     .map((w) => `<option value="${w.id}">${escapeHtml(w.name_ar || w.name)}</option>`)
     .join("");
+  // Both start blank: a movement booked against a guessed item or warehouse is
+  // a stock error that only surfaces when someone counts the shelf.
+  const BLANK_ITEM = '<option value="">— اختر الصنف —</option>';
+  const BLANK_WH = '<option value="">— اختر المخزن —</option>';
 
   const form = el(`<form novalidate>
     <div class="field"><label class="field__label">نوع الحركة</label>
@@ -2900,15 +2948,15 @@ function openMovementSheet(lookups, onDone = () => renderInventory()) {
         ${kinds.map((k) => `<option value="${k.key}">${k.label}</option>`).join("")}
       </select></div>
     <div class="field"><label class="field__label">الصنف</label>
-      <select class="select" name="item_id">${itemOptions}</select></div>
+      <select class="select" name="item_id">${BLANK_ITEM}${itemOptions}</select></div>
     <div class="field" data-field="warehouse"><label class="field__label">المخزن</label>
-      <select class="select" name="warehouse_id">${whOptions}</select></div>
+      <select class="select" name="warehouse_id">${BLANK_WH}${whOptions}</select></div>
     <div class="field" data-field="to_warehouse" hidden><label class="field__label">إلى مخزن</label>
-      <select class="select" name="to_warehouse_id">${whOptions}</select></div>
+      <select class="select" name="to_warehouse_id">${BLANK_WH}${whOptions}</select></div>
     <div class="field"><label class="field__label" data-quantity-label>الكمية</label>
       <input class="input num" name="quantity" inputmode="decimal" required /></div>
     <div class="field" data-field="unit_cost" hidden><label class="field__label">تكلفة الوحدة</label>
-      <input class="input num" name="unit_cost" inputmode="decimal" value="0" /></div>
+      <input class="input num" name="unit_cost" inputmode="decimal" placeholder="0.00" /></div>
     <div class="field"><label class="field__label">التاريخ</label>
       <input class="input" type="date" name="movement_date" value="${today()}" required /></div>
     <div class="field" data-field="reference"><label class="field__label">المرجع</label>
@@ -2938,7 +2986,7 @@ function openMovementSheet(lookups, onDone = () => renderInventory()) {
     if (kind === "transfer") {
       const source = form.elements.warehouse_id;
       const target = form.elements.to_warehouse_id;
-      if (target.value === source.value) {
+      if (source.value && target.value === source.value) {
         const other = warehouses.find((w) => String(w.id) !== source.value);
         if (other) target.value = String(other.id);
       }
@@ -2947,7 +2995,9 @@ function openMovementSheet(lookups, onDone = () => renderInventory()) {
   const syncItemWarehouse = () => {
     const chosen = items.find((i) => String(i.id) === form.elements.item_id.value);
     const preferred = chosen?.default_warehouse_id;
-    if (preferred && warehouses.some((w) => w.id === preferred)) {
+    // Only fill an empty choice: overwriting a warehouse the user picked would
+    // move stock somewhere they did not choose.
+    if (preferred && !form.elements.warehouse_id.value && warehouses.some((w) => w.id === preferred)) {
       form.elements.warehouse_id.value = String(preferred);
     }
   };
@@ -2970,12 +3020,17 @@ function openMovementSheet(lookups, onDone = () => renderInventory()) {
     const notes = String(data.get("notes") || "").trim();
     const reference = String(data.get("reference") || "").trim();
     const itemId = Number(data.get("item_id"));
+    if (!itemId) return toast("اختر الصنف", "error");
+    // Checked before the transfer branch: with both blank, from === to (0 === 0)
+    // would report "pick two different warehouses" instead of the real gap.
+    if (!Number(data.get("warehouse_id"))) return toast("اختر المخزن", "error");
 
     let endpoint;
     let body;
     if (kind === "transfer") {
       const from = Number(data.get("warehouse_id"));
       const to = Number(data.get("to_warehouse_id"));
+      if (!to) return toast("اختر المخزن المستلم", "error");
       if (from === to) return toast("اختر مخزنين مختلفين", "error");
       endpoint = "transfer";
       body = {
@@ -3665,7 +3720,7 @@ function openTaxCodeSheet(code, taxAccounts) {
       <input class="input" id="name" value="${escapeHtml(code?.name || "")}" /></div>
     <div class="field"><label class="field__label">النسبة %</label>
       <input class="input num" id="rate" type="number" step="0.01" min="0" inputmode="decimal"
-        value="${code ? Number(code.rate) : 14}" required /></div>
+        placeholder="14" value="${code ? Number(code.rate) : ""}" required /></div>
     <div class="field"><label class="field__label">النوع</label>
       <select class="select" id="kind">
         ${Object.entries(TAX_KIND_LABELS)

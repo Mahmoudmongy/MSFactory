@@ -361,6 +361,17 @@ button { cursor: pointer; }
 .input.num { text-align: left; }
 .textarea { min-height: 88px; resize: vertical; }
 
+/* Hints live in the empty box, never as a value: a real value would be saved
+   if the user forgot to change it. --ink-500 is the muted token that still
+   clears 4.5:1 in both themes (4.76 light, 5.92 dark). */
+.input::placeholder, .textarea::placeholder {
+  color: var(--ink-500);
+  opacity: 1; /* Firefox dims placeholders by default */
+}
+/* Number fields cannot show a placeholder in some browsers while a spinner is
+   present, and a "0" hint is meaningless anyway — keep the hint on the label. */
+.input.num::placeholder { text-align: left; }
+
 /* ---------- Buttons ---------- */
 .btn {
   display: inline-flex;
