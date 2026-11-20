@@ -136,6 +136,16 @@
   }
 
   function warehouseLabel(id) {
+    // Prefer the full path (parent / child) so two warehouses with the same
+    // leaf name stay distinguishable in the alert details.
+    if (typeof whPath === 'function') {
+      try {
+        const path = whPath(id);
+        if (path) return path;
+      } catch (_) {
+        /* fall through to the raw name */
+      }
+    }
     const w = warehouses().find((x) => String(x.id) === String(id));
     return w ? w.name : '';
   }
@@ -760,51 +770,135 @@
   }
 
   /* Alert details: every card opens the underlying records, because a count
-     alone never tells the user which invoice or item to act on. */
+     alone never tells the user which invoice or item to act on. Each row also
+     carries a `fields` list so the sheet can show the whole movement, and an
+     `open` callback so tapping the row lands on that exact record. */
   function alertRows(key) {
-    const name = (d) => (typeof pn === 'function' ? pn(d.pid) : '');
+    const name = (d) => (typeof pn === 'function' ? safeCall(() => pn(d.pid), '') : '');
+    const money = (v) => (hideNumbers() ? '—' : mf(v) + ' ج.م');
+    const daysBetween = (from, to) => {
+      if (!from) return null;
+      const a = new Date(from + 'T12:00:00');
+      const b = new Date((to || today()) + 'T12:00:00');
+      return Math.round((b - a) / 86400000);
+    };
+
     if (key === 'overdue-sales' || key === 'overdue-purchases') {
       const kind = key === 'overdue-sales' ? 'sale' : 'pur';
+      const isSale = kind === 'sale';
       return overdueDocs(kind)
         .sort((a, b) => String(a.due).localeCompare(String(b.due)))
-        .map((d) => ({
-          title: d.no || '',
-          meta: [name(d), L('استحقاق', 'Due') + ' ' + factoryDateFormat(d.due || d.date)]
-            .filter(Boolean)
-            .join(' · '),
-          value: remainingOf(d),
-          open: () => openRef('doc', d.id),
-        }));
+        .map((d) => {
+          const total = Number(d.total) || 0;
+          const paid = typeof paidOf === 'function' ? Number(safeCall(() => paidOf(d), 0)) || 0 : 0;
+          const remaining = safeCall(() => remainingOf(d), 0);
+          const late = daysBetween(d.due || d.date, today());
+          return {
+            title: d.no || '',
+            meta: [name(d), L('استحقاق', 'Due') + ' ' + dayFmt(d.due || d.date)].filter(Boolean).join(' · '),
+            value: remaining,
+            valueLabel: L('المتبقي', 'Remaining'),
+            fields: [
+              { label: L('نوع المستند', 'Document type'), value: isSale ? L('فاتورة بيع', 'Sales invoice') : L('فاتورة شراء', 'Purchase invoice') },
+              { label: L('التاريخ', 'Date'), value: dayFmt(d.date) },
+              { label: L('تاريخ الاستحقاق', 'Due date'), value: dayFmt(d.due || d.date) },
+              { label: L('الطرف', 'Party'), value: name(d) || L('غير مسجل', 'Not registered') },
+              { label: L('الإجمالي', 'Total'), value: money(total) },
+              { label: L('المدفوع', 'Paid'), value: money(paid) },
+              { label: L('المتبقي', 'Remaining'), value: money(remaining), strong: true },
+              {
+                label: L('التأخير', 'Overdue'),
+                value: late === null ? '—' : L(`${nf(late)} يوم`, `${nf(late)} days`),
+                tone: 'warn',
+              },
+              ...(d.note ? [{ label: L('البيان', 'Description'), value: d.note }] : []),
+            ],
+            open: () => openRef('doc', d.id),
+          };
+        });
     }
+
     if (key === 'low-stock') {
       return lowStockItems().map((i) => {
         const qty = Object.values(i.st || {}).reduce((a, b) => a + (Number(b) || 0), 0);
+        const min = Number(i.min) || 0;
         return {
           title: i.name || '',
-          meta: L('الحد الأدنى', 'Reorder point') + ' ' + nf(i.min),
+          meta: L('الحد الأدنى', 'Reorder point') + ' ' + nf(min),
           value: qty,
           valueLabel: L('المتاح', 'On hand'),
           qty: true,
+          fields: [
+            { label: L('الصنف', 'Item'), value: i.name || '' },
+            ...(i.code ? [{ label: L('الكود', 'Code'), value: i.code }] : []),
+            { label: L('المتاح', 'On hand'), value: nf(qty) + (i.unit ? ' ' + i.unit : ''), strong: true },
+            { label: L('حد الطلب', 'Reorder point'), value: nf(min) },
+            {
+              label: L('النقص', 'Shortfall'),
+              value: nf(Math.max(0, min - qty)) + (i.unit ? ' ' + i.unit : ''),
+              tone: 'warn',
+            },
+            ...(i.wh ? [{ label: L('المخزن', 'Warehouse'), value: warehouseLabel(i.wh) }] : []),
+          ],
           open: () => {
             if (typeof go === 'function') go('items');
           },
         };
       });
     }
+
     if (key === 'open-orders') {
       return workOrders()
         .filter((o) => Number(o.st) !== 2)
-        .map((o) => ({
-          title: o.no || '',
-          meta:
-            Number(o.st) === 1 ? L('قيد التنفيذ', 'In progress') : L('جديدة', 'New'),
-          value: Number(o.total) || 0,
-          open: () => {
-            if (typeof openRef === 'function') openRef('po', o.id);
-          },
-        }));
+        .map((o) => {
+          const status = Number(o.st) === 1 ? L('قيد التنفيذ', 'In progress') : L('جديدة', 'New');
+          // Imported Manager.io orders can lack `subs`; a missing array must not
+          // take down the whole alert list.
+          let planned = 0;
+          if (typeof poQty === 'function') {
+            try {
+              planned = Number(poQty(o)) || 0;
+            } catch (_) {
+              planned = Array.isArray(o.subs) ? o.subs.reduce((n, s) => n + (Number(s.qty) || 0), 0) : 0;
+            }
+          }
+          const received =
+            o.st == 2 && Array.isArray(o.rec) ? o.rec.reduce((n, r) => n + (Number(r.qty) || 0), 0) : 0;
+          return {
+            title: o.no || '',
+            meta: status,
+            value: Number(o.total) || 0,
+            fields: [
+              { label: L('رقم الأمر', 'Order no.'), value: o.no || '' },
+              { label: L('الحالة', 'Status'), value: status, tone: 'warn' },
+              { label: L('التاريخ', 'Date'), value: dayFmt(o.date) },
+              { label: L('الصنف النهائي', 'Finished item'), value: (typeof pnm === 'function' ? safeCall(() => pnm(o), '') : '') || '—' },
+              { label: L('الكمية المخططة', 'Planned qty'), value: nf(planned) },
+              { label: L('الكمية المستلمة', 'Received qty'), value: nf(received) },
+              {
+                label: L('التكلفة', 'Cost'),
+                value: money(Number(o.total) || 0),
+                strong: true,
+              },
+              ...(o.desc ? [{ label: L('البيان', 'Description'), value: o.desc }] : []),
+            ],
+            open: () => {
+              if (typeof openRef === 'function') openRef('po', o.id);
+            },
+          };
+        });
     }
     return [];
+  }
+
+
+  /** Wrappers that never throw: one malformed imported row must not blank the sheet. */
+  function safeCall(fn, fallback) {
+    try {
+      return fn();
+    } catch (_) {
+      return fallback;
+    }
   }
 
   const ALERT_TITLES = {
@@ -823,7 +917,6 @@
   function openAlertSheet(key) {
     closeAlertSheet();
     const rows = alertRows(key);
-    const money = key === 'overdue-sales' || key === 'overdue-purchases' || key === 'open-orders';
     const wrap = document.createElement('div');
     wrap.id = 'factory-alert-sheet';
     wrap.className = 'factory-sheet';
@@ -844,12 +937,28 @@
           rows
             .map(
               (r, i) =>
-                `<li><button type="button" data-row="${i}">` +
-                `<span class="factory-sheet-title">${esc(r.title)}</span>` +
-                `<span class="factory-sheet-meta">${esc(r.meta)}</span>` +
-                `<b dir="ltr">${esc(
-                  hideNumbers() ? '—' : r.qty ? nf(r.value) : money ? mf(r.value) + ' ج.م' : nf(r.value),
-                )}</b>` +
+                '<li><button type="button" class="factory-sheet-row" data-row="' + i + '">' +
+                '<span class="factory-sheet-title">' + esc(r.title) + '</span>' +
+                '<span class="factory-sheet-meta">' + esc(r.meta) + '</span>' +
+                '<b dir="ltr">' + esc(
+                  hideNumbers() ? '—' : r.qty ? nf(r.value) : mf(r.value) + ' ج.م',
+                ) + '</b>' +
+                // Full movement details, always visible: the count alone never
+                // told the user which document to act on.
+                (r.fields && r.fields.length
+                  ? '<dl class="factory-sheet-fields">' +
+                    r.fields
+                      .map(
+                        (f) =>
+                          '<div' + (f.strong ? ' class="is-strong"' : '') + '>' +
+                          '<dt>' + esc(f.label) + '</dt>' +
+                          '<dd' + (f.tone ? ' class="is-' + esc(f.tone) + '"' : '') + '>' + esc(f.value) + '</dd>' +
+                          '</div>',
+                      )
+                      .join('') +
+                    '</dl>'
+                  : '') +
+                '<span class="factory-sheet-open">' + esc(L('فتح الحركة', 'Open transaction')) + ' ‹</span>' +
                 '</button></li>',
             )
             .join('') +
