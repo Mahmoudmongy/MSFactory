@@ -10,7 +10,12 @@
  * from ``/api/v1/auth/login`` and are kept in local storage under keys this
  * module owns.
  */
-const API = '/api/v1';
+// Resolved at load time by js/config.js: relative when the API serves these
+// files, absolute when the screens are hosted separately. Reading it from the
+// global keeps this module free of build-time constants.
+const API =
+  (typeof window !== 'undefined' && window.MSFACTORY_CONFIG && window.MSFACTORY_CONFIG.apiBase) ||
+  '/api/v1';
 
 const ACCESS_KEY = 'msfactory.legacy.access';
 const REFRESH_KEY = 'msfactory.legacy.refresh';
@@ -46,7 +51,9 @@ export async function apiJson(path, options = {}) {
   if (tokens?.access) headers.Authorization = 'Bearer ' + tokens.access;
   let response;
   try {
-    response = await fetch(API + path, { ...options, headers });
+    // Authenticated reads must never come from the HTTP cache: the API sends no
+    // Cache-Control, so a re-read after a write could return the pre-write body.
+    response = await fetch(API + path, { cache: 'no-store', ...options, headers });
   } catch (error) {
     return { data: null, error };
   }
@@ -95,8 +102,13 @@ async function fetchMe() {
  * its own round trip. The endpoint returns both, so the whole app now depends
  * on a single request; only the ``me`` half is cached here, the collections are
  * handed to the read bridge.
+ *
+ * Pass ``{ fresh: true }`` to bypass the cache. Callers that re-read state after
+ * a write must do so, otherwise they re-apply the payload captured at startup
+ * and the screen keeps showing the pre-write values.
  */
-export function loadBootstrap() {
+export function loadBootstrap({ fresh = false } = {}) {
+  if (fresh) bootstrapPromise = null;
   if (!bootstrapPromise) {
     bootstrapPromise = apiJson('/bootstrap').then(({ data, error }) => {
       if (error) {

@@ -48,7 +48,7 @@ async function boot() {
 // screens do not block on it. The local state still updates immediately.
 window.__factoryPersistState = async () => true;
 window.__factoryDatabaseSyncNow = async () => {
-  await hydrateLegacyState();
+  await hydrateLegacyState({ fresh: true });
 };
 
 boot();

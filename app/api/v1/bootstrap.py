@@ -14,9 +14,12 @@ than omitted, so the client can treat the payload as a fixed shape.
 """
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+try:  # Workers-class runtimes (Pyodide/WASM) cannot start threads.
+    from concurrent.futures import ThreadPoolExecutor
+except ImportError:  # pragma: no cover
+    ThreadPoolExecutor = None  # type: ignore[assignment]
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 
 from ...core.permissions import Permission, has_permission
 from ...db.session import read_session
@@ -98,7 +101,11 @@ def _read(name: str, company_id: int, user_id: int):
         if name == "journal":
             return _dump(JournalOut, JournalRepository(db, company_id).list(limit=100))
         if name == "contacts":
-            return _dump(ContactOut, ContactRepository(db, company_id).list())
+            # Inactive contacts stay in the payload: the screens show them with a
+            # "stopped" badge so they can be re-activated. Pickers filter them out.
+            return _dump(
+                ContactOut, ContactRepository(db, company_id).list(include_inactive=True)
+            )
         if name == "invoices":
             return _dump(InvoiceOut, InvoiceService(db, company_id, user_id).list())
         if name == "payments":
@@ -120,7 +127,7 @@ def _read(name: str, company_id: int, user_id: int):
                 "items": _dump(ItemOut, inventory.items.list(include_inactive=False)),
                 "units": _dump(UnitOut, inventory.units.list(include_inactive=True)),
                 "warehouses": _dump(
-                    WarehouseOut, inventory.warehouses.list(include_inactive=False)
+                    WarehouseOut, inventory.warehouses.list(include_inactive=True)
                 ),
             }
         if name == "team":
@@ -133,9 +140,37 @@ def _read(name: str, company_id: int, user_id: int):
         raise ValueError(f"unknown collection: {name}")
 
 
+def _read_all(wanted: list[str], company_id: int, user_id: int) -> dict:
+    """Read the requested collections, concurrently when threads exist.
+
+    The database is remote, so each collection costs a round trip and reading
+    them in sequence makes startup scale with their number. A thread pool hides
+    that latency. Runtimes that cannot start threads (Pyodide/WASM) fall back to
+    the sequential loop, which is correct but slower.
+    """
+    if ThreadPoolExecutor is not None:
+        with ThreadPoolExecutor(max_workers=min(_MAX_WORKERS, len(wanted))) as pool:
+            results = list(pool.map(lambda n: _read(n, company_id, user_id), wanted))
+    else:  # pragma: no cover - only on threadless runtimes
+        results = [_read(n, company_id, user_id) for n in wanted]
+
+    merged: dict[str, object] = {}
+    for name, value in zip(wanted, results, strict=True):
+        if name == "snapshot":
+            merged.update(value)
+        else:
+            merged[name] = value
+    return merged
+
+
 @router.get("", response_model=dict)
-def bootstrap(principal: Principal = Depends(get_principal_readonly)):
+def bootstrap(
+    response: Response,
+    principal: Principal = Depends(get_principal_readonly),
+):
     """Every collection the app needs at startup, in one authenticated call."""
+    # Callers re-read this after a write; a cached copy would show pre-write rows.
+    response.headers["Cache-Control"] = "no-store"
     role = principal.role
     company_id = principal.company_id
     user_id = principal.user.id
@@ -181,13 +216,7 @@ def bootstrap(principal: Principal = Depends(get_principal_readonly)):
         wanted.append("settings")
 
     if wanted:
-        with ThreadPoolExecutor(max_workers=min(_MAX_WORKERS, len(wanted))) as pool:
-            results = dict(zip(wanted, pool.map(lambda n: _read(n, company_id, user_id), wanted)))
-        for name, value in results.items():
-            if name == "snapshot":
-                payload.update(value)
-            else:
-                payload[name] = value
+        payload.update(_read_all(wanted, company_id, user_id))
 
     if allowed(Permission.USER_MANAGE):
         payload["roles"] = [

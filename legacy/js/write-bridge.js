@@ -27,7 +27,7 @@ export function serverRef(entity) {
 /** Re-read everything from the API so the cache matches the database again. */
 async function refreshFromServer() {
   try {
-    await hydrateLegacyState();
+    await hydrateLegacyState({ fresh: true });
   } catch (error) {
     console.error('Refresh after write failed:', error);
   }

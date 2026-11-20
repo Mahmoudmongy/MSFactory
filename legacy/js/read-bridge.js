@@ -70,6 +70,7 @@ function mapAccounts(rows) {
     cur: a.currency || 'EGP',
     parentId: a.parent_id ?? null,
     isGroup: !!a.is_group,
+    active: a.is_active !== false,
   }));
 }
 
@@ -82,6 +83,7 @@ function mapWarehouses(rows) {
     parentId: w.parent_id ?? null,
     isGroup: !!w.is_group,
     kind: w.kind || '',
+    active: w.is_active !== false,
   }));
 }
 
@@ -175,6 +177,7 @@ function mapPartners(rows) {
     gov: '',
     city: '',
     adr: '',
+    active: c.is_active !== false,
   }));
 }
 
@@ -386,8 +389,8 @@ async function fetchEach() {
  * round trip, and thirteen of them dominated startup. The per-collection
  * fallback stays for older deployments whose API predates the endpoint.
  */
-async function fetchAll() {
-  const { data, error } = await loadBootstrap();
+async function fetchAll({ fresh = false } = {}) {
+  const { data, error } = await loadBootstrap({ fresh });
   if (!error && data && Array.isArray(data.accounts)) {
     return {
       accounts: data.accounts,
@@ -409,9 +412,15 @@ async function fetchAll() {
   return fetchEach();
 }
 
-/** Load everything and push it into the legacy state. */
-export async function hydrateLegacyState() {
-  const data = await fetchAll();
+/**
+ * Load everything and push it into the legacy state.
+ *
+ * ``fresh`` forces a new ``/bootstrap`` read; every caller that runs *after* a
+ * write must pass it, or the cached startup payload would overwrite the change
+ * the write just made.
+ */
+export async function hydrateLegacyState({ fresh = false } = {}) {
+  const data = await fetchAll({ fresh });
 
   const accts = mapAccounts(data.accounts || []);
   const wh = mapWarehouses(data.warehouses || []);
