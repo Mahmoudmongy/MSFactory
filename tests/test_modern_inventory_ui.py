@@ -110,3 +110,21 @@ def test_hidden_attribute_beats_layout_rules(styles_css: str) -> None:
     assert "[hidden]" in styles_css
     rule = styles_css[styles_css.index("[hidden]") :]
     assert "display: none" in rule.split("}")[0]
+
+
+def test_a_negative_balance_is_surfaced_not_just_displayed(app_js: str) -> None:
+    """The number alone is easy to scroll past; the balance must be flagged."""
+    start = app_js.index("async function renderInventoryStock")
+    body = app_js[start : app_js.index("async function renderInventoryItems")]
+    assert 'filter((s) => Number(s.quantity) < 0)' in body
+    assert "banner--danger" in body
+    assert 'class="row--negative"' in body
+    assert "رصيد سالب" in body
+
+
+def test_the_negative_banner_has_styles_in_both_themes(styles_css: str) -> None:
+    for selector in (".banner--danger", "tr.row--negative td"):
+        assert selector in styles_css
+    start = styles_css.index(".banner--danger")
+    rule = styles_css[start : styles_css.index("}", start)]
+    assert "var(--danger-bg)" in rule and "var(--danger-fg)" in rule

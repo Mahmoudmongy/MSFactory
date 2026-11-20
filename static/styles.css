@@ -681,5 +681,17 @@ td.num, th.num { text-align: left; }
 .assistant__row:last-child { border-block-end: 0; }
 .assistant__row strong { color: var(--brand-700); }
 
+/* ---------- Stock warnings ---------- */
+/* A negative balance is an error state, not a number to read past. */
+.banner {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 12px 14px; margin-block-end: 12px;
+  border-radius: var(--radius); font-size: 0.875rem;
+}
+.banner--danger { background: var(--danger-bg); color: var(--danger-fg); }
+.banner strong { font-weight: 600; }
+
+tr.row--negative td { background: var(--danger-bg); color: var(--danger-fg); font-weight: 600; }
+
 /* `hidden` must win over the flex/grid display rules the form fields carry. */
 [hidden] { display: none !important; }

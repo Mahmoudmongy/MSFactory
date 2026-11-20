@@ -2456,9 +2456,13 @@ async function renderInventoryStock(tabs, view) {
       api("/inventory/summary"),
       loadInventoryLookups(),
     ]);
+    // A negative balance means goods left a warehouse that never held them.
+    // It cannot be prevented retroactively, so it is surfaced here with a way
+    // to correct it instead of sitting quietly in the table.
+    const negatives = stock.filter((s) => Number(s.quantity) < 0);
     const rows = stock
       .map(
-        (s) => `<tr>
+        (s) => `<tr${Number(s.quantity) < 0 ? ' class="row--negative"' : ""}>
         <td>${escapeHtml(s.item_name_ar || s.item_name)}</td>
         <td>${escapeHtml(s.warehouse_name)}</td>
         <td>${escapeHtml(s.unit)}</td>
@@ -2480,6 +2484,12 @@ async function renderInventoryStock(tabs, view) {
           <div class="kpi kpi--assets"><div class="kpi__label">طريقة التكلفة</div>
             <div class="kpi__value" style="font-size:1rem">${escapeHtml(summary.costing_method)}</div></div>
         </div>
+        ${negatives.length
+          ? `<div class="banner banner--danger">
+              <strong>${negatives.length} رصيد سالب</strong>
+              <div>صُرفت كمية من مخزن لم يكن فيها. سجّل جرداً بالكمية الفعلية لتصحيحه.</div>
+            </div>`
+          : ""}
         <div class="card card--flush">
           ${stock.length ? `<div class="table-wrap"><table>
             <thead><tr><th>الصنف</th><th>المخزن</th><th>الوحدة</th><th class="num">الكمية</th>
