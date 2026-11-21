@@ -376,7 +376,7 @@ def test_issue_cannot_exceed_the_warehouse_balance(db, company):
 
     # Either guard may fire first — the company total and this warehouse both
     # hold 10 — but it must never succeed.
-    with pytest.raises(ValidationError, match="الرصيد المتاح|رصيد المخزن"):
+    with pytest.raises(ValidationError, match=r"الرصيد المتاح|رصيد المخزن"):
         inv.issue(item_id=item.id, warehouse_id=raw.id, quantity=11,
                   movement_date=date(2026, 1, 2), post_journal=False)
 

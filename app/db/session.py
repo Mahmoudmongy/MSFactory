@@ -20,8 +20,13 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from ..core.config import settings
 
+# On a transaction pooler each transaction lands on a different backend, so a
+# prepared statement made in one is gone by the next. Disable preparing there.
+_connect_args = {"prepare_threshold": None} if settings.uses_transaction_pooler else {}
+
 engine = create_engine(
     settings.database_url,
+    connect_args=_connect_args,
     pool_pre_ping=True,
     pool_size=settings.db_pool_size,
     max_overflow=settings.db_max_overflow,
@@ -31,6 +36,7 @@ engine = create_engine(
 
 read_engine = create_engine(
     settings.database_url,
+    connect_args=_connect_args,
     pool_pre_ping=False,
     pool_recycle=settings.db_pool_recycle,
     pool_size=settings.db_pool_size,

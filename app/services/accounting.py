@@ -22,7 +22,14 @@ from ..repositories.documents import JournalRepository
 ZERO = Decimal("0.00")
 
 # Journal source types are stored in English; the audit trail shows Arabic.
-SOURCE_TYPE_AR = {"manual": "يدوي", "invoice": "فاتورة", "payment": "سند", "production": "إنتاج", "opening": "افتتاحي", "return": "مرتجع"}
+SOURCE_TYPE_AR = {
+    "manual": "يدوي",
+    "invoice": "فاتورة",
+    "payment": "سند",
+    "production": "إنتاج",
+    "opening": "افتتاحي",
+    "return": "مرتجع",
+}
 
 
 class AccountingService:

@@ -43,7 +43,12 @@ ZERO = Decimal("0.00")
 
 # Invoice kinds and payment directions are stored in English; the audit trail
 # is read by Arabic speakers, so it shows the Arabic word.
-KIND_AR = {"sales": "فاتورة بيع", "purchase": "فاتورة شراء", "sales_return": "مرتجع بيع", "purchase_return": "مرتجع شراء"}
+KIND_AR = {
+    "sales": "فاتورة بيع",
+    "purchase": "فاتورة شراء",
+    "sales_return": "مرتجع بيع",
+    "purchase_return": "مرتجع شراء",
+}
 
 
 class InvoiceService:
@@ -695,25 +700,9 @@ class InvoiceService:
                     )
                 )
             if to_money(invoice.tax_total) and vat:
-                if is_return:
-                    lines.append(EntryLine(account_id=vat.id, debit=invoice.tax_total, description="ضريبة القيمة المضافة"))
-                else:
-                    lines.append(EntryLine(account_id=vat.id, credit=invoice.tax_total, description="ضريبة القيمة المضافة"))
+                lines.append(_tax_line(vat.id, invoice.tax_total, is_sales=True, is_return=is_return))
             if stock_cost > ZERO and cogs and inventory:
-                if is_return:
-                    lines.append(
-                        EntryLine(account_id=cogs.id, credit=stock_cost, description=f"تكلفة مرتجع {invoice.number}")
-                    )
-                    lines.append(
-                        EntryLine(account_id=inventory.id, debit=stock_cost, description=f"إعادة مخزون {invoice.number}")
-                    )
-                else:
-                    lines.append(
-                        EntryLine(account_id=cogs.id, debit=stock_cost, description=f"تكلفة مبيعات {invoice.number}")
-                    )
-                    lines.append(
-                        EntryLine(account_id=inventory.id, credit=stock_cost, description=f"صرف مخزون {invoice.number}")
-                    )
+                lines.extend(_cogs_lines(cogs.id, inventory.id, stock_cost, invoice.number, is_return=is_return))
         else:
             if is_return:
                 lines.append(
@@ -734,12 +723,9 @@ class InvoiceService:
                     )
                 )
             if to_money(invoice.tax_total) and vat:
-                if is_return:
-                    lines.append(EntryLine(account_id=vat.id, credit=invoice.tax_total, description="ضريبة القيمة المضافة"))
-                else:
-                    lines.append(EntryLine(account_id=vat.id, debit=invoice.tax_total, description="ضريبة القيمة المضافة"))
+                lines.append(_tax_line(vat.id, invoice.tax_total, is_sales=False, is_return=is_return))
 
-        memo_kind = {"sales": "Sales invoice", "purchase": "Purchase invoice", "sales_return": "Sales return", "purchase_return": "Purchase return"}[invoice.kind]
+        memo_kind = _MEMO_KIND[invoice.kind]
         entry = self.accounting.post(
             entry_date=invoice.issue_date,
             lines=lines,
@@ -750,6 +736,38 @@ class InvoiceService:
         )
         invoice.journal_entry_id = entry.id
         self.db.flush()
+
+
+_MEMO_KIND = {
+    "sales": "Sales invoice",
+    "purchase": "Purchase invoice",
+    "sales_return": "Sales return",
+    "purchase_return": "Purchase return",
+}
+
+
+def _tax_line(account_id: int, amount, *, is_sales: bool, is_return: bool) -> EntryLine:
+    """VAT follows the goods: output tax on a sale, input tax on a purchase.
+
+    A sale credits VAT and a sales return debits it; a purchase is the mirror
+    image, so the sign flips with the kind as well as with the return flag.
+    """
+    if is_sales != is_return:
+        return EntryLine(account_id=account_id, credit=amount, description="ضريبة القيمة المضافة")
+    return EntryLine(account_id=account_id, debit=amount, description="ضريبة القيمة المضافة")
+
+
+def _cogs_lines(cogs_id: int, inventory_id: int, cost, number: str, *, is_return: bool) -> list[EntryLine]:
+    """A sale moves cost out of stock; a return puts it back."""
+    if is_return:
+        return [
+            EntryLine(account_id=cogs_id, credit=cost, description=f"تكلفة مرتجع {number}"),
+            EntryLine(account_id=inventory_id, debit=cost, description=f"إعادة مخزون {number}"),
+        ]
+    return [
+        EntryLine(account_id=cogs_id, debit=cost, description=f"تكلفة مبيعات {number}"),
+        EntryLine(account_id=inventory_id, credit=cost, description=f"صرف مخزون {number}"),
+    ]
 
 
 def contact_company_currency(contact, company_id: int) -> str:

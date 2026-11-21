@@ -18,7 +18,6 @@ from decimal import Decimal
 from html import escape
 
 from ..db.models import Company, Contact, Invoice, InvoiceLine, Payment
-from ..repositories.core import SettingRepository
 
 # Arabic labels for the kinds the invoice model can hold. A kind that is not
 # here still prints; the raw value is shown rather than a blank cell.
@@ -36,7 +35,7 @@ PAYMENT_KIND_LABELS = {
 
 # Egyptian vouchers print the amount in words next to the figure, because that
 # is what makes a receipt checkable by eye and impossible to alter with an extra
-# zero. These tables follow the standard Arabic counting rules, where 11–19 take
+# zero. These tables follow the standard Arabic counting rules, where 11-19 take
 # a single form and 21 is "one and twenty".
 _ARABIC_ONES = ["", "واحد", "اثنان", "ثلاثة", "أربعة", "خمسة", "ستة", "سبعة", "ثمانية", "تسعة"]
 _ARABIC_TEENS = [
@@ -48,7 +47,7 @@ _ARABIC_HUNDREDS = [
     "", "مئة", "مئتان", "ثلاثمئة", "أربعمئة",
     "خمسمئة", "ستمئة", "سبعمئة", "ثمانمئة", "تسعمئة",
 ]
-# (value, singular, dual, plural) — Arabic counts 1, 2 and 3–10 differently.
+# (value, singular, dual, plural) - Arabic counts 1, 2 and 3-10 differently.
 _ARABIC_SCALES = [
     (1_000_000_000, "مليار", "مليارا", "مليارات"),
     (1_000_000, "مليون", "مليونا", "ملايين"),
@@ -103,7 +102,7 @@ _MINOR_FORMS = {
 
 
 def _three_digits(number: int) -> str:
-    """1–999 in Arabic words, e.g. 342 → «ثلاثمئة واثنان وأربعون»."""
+    """1-999 in Arabic words, e.g. 342 -> «ثلاثمئة واثنان وأربعون»."""
     hundreds, remainder = divmod(number, 100)
     parts = []
     if hundreds:
@@ -232,6 +231,11 @@ STATUS_LABELS = {
 def _text(value) -> str:
     """Escape a value for HTML, turning None into an empty string."""
     return escape("" if value is None else str(value))
+
+
+def _row(label: str, value, currency: str, *, css: str = "") -> str:
+    """One label/value line in the totals block."""
+    return f'<div class="row{css}"><span>{label}</span><span class="num">{_amount(value, currency)}</span></div>'
 
 
 def _amount(value: Decimal | int | float | None, currency: str = "") -> str:
@@ -492,27 +496,15 @@ def render_invoice(
         rows.append('<tr><td colspan="7" style="text-align:center;color:#6b7280">لا توجد بنود</td></tr>')
 
     outstanding = Decimal(str(invoice.total or 0)) - Decimal(str(invoice.amount_paid or 0))
-    totals_rows = [
-        f'<div class="row"><span>المجموع</span><span class="num">{_amount(invoice.subtotal, currency)}</span></div>',
-    ]
+    totals_rows = [_row("المجموع", invoice.subtotal, currency)]
     if Decimal(str(invoice.discount_total or 0)):
-        totals_rows.append(
-            f'<div class="row"><span>الخصم</span><span class="num">{_amount(invoice.discount_total, currency)}</span></div>'
-        )
+        totals_rows.append(_row("الخصم", invoice.discount_total, currency))
     if Decimal(str(invoice.tax_total or 0)):
-        totals_rows.append(
-            f'<div class="row"><span>الضريبة</span><span class="num">{_amount(invoice.tax_total, currency)}</span></div>'
-        )
-    totals_rows.append(
-        f'<div class="row grand"><span>الإجمالي</span><span class="num">{_amount(invoice.total, currency)}</span></div>'
-    )
+        totals_rows.append(_row("الضريبة", invoice.tax_total, currency))
+    totals_rows.append(_row("الإجمالي", invoice.total, currency, css=" grand"))
     if Decimal(str(invoice.amount_paid or 0)):
-        totals_rows.append(
-            f'<div class="row"><span>المدفوع</span><span class="num">{_amount(invoice.amount_paid, currency)}</span></div>'
-        )
-        totals_rows.append(
-            f'<div class="row"><span>المتبقي</span><span class="num">{_amount(outstanding, currency)}</span></div>'
-        )
+        totals_rows.append(_row("المدفوع", invoice.amount_paid, currency))
+        totals_rows.append(_row("المتبقي", outstanding, currency))
 
     due_html = (
         f'<div class="line">تاريخ الاستحقاق: {_date(invoice.due_date)}</div>' if invoice.due_date else ""

@@ -210,3 +210,145 @@ def test_static_bundle_uses_paths_a_file_host_can_serve(tmp_path):
     # One config file for both interfaces: the legacy pages climb to the root.
     assert 'src="../api-config.js"' in (dist / "app" / "index.html").read_text()
     assert not (dist / "app" / "api-config.js").exists()
+
+
+def test_supabase_transaction_pooler_disables_prepared_statements():
+    """The pooler swaps backends per transaction, so psycopg must not prepare.
+
+    Without this, the second query on a pooled connection fails with
+    "prepared statement ... does not exist" — a failure that only appears in
+    production, never on a local single-backend Postgres.
+    """
+    from app.core.config import Settings
+
+    # _env_file=None keeps a developer's real .env from leaking into the case.
+    pooled = Settings(
+        _env_file=None,
+        database_url="postgresql+psycopg://u:p@aws-0-eu-central-1.pooler.supabase.com:6543/postgres",
+    )
+    direct = Settings(
+        _env_file=None, database_url="postgresql+psycopg://u:p@db.example.com:5432/postgres"
+    )
+
+    assert pooled.uses_transaction_pooler is True
+    assert direct.uses_transaction_pooler is False
+
+
+def _wrangler_config() -> dict:
+    """The Wrangler file is JSONC; strip line comments before parsing."""
+    import json
+    import re
+
+    root = Path(__file__).resolve().parents[1]
+    raw = (root / "cloudflare" / "wrangler.jsonc").read_text()
+    return json.loads(re.sub(r"^\s*//.*$", "", raw, flags=re.M))
+
+
+def test_wrangler_builds_the_repo_dockerfile():
+    """Cloudflare Containers has no build hook, so the image is the app.
+
+    The build context must be the repository root: the Dockerfile copies
+    app/, static/, legacy/, alembic/ and scripts/, none of which live beside
+    the Wrangler file.
+    """
+    config = _wrangler_config()
+    (container,) = config["containers"]
+
+    assert container["scheduling_policy"] == "durable_object"
+    assert container["images"]["base"]["dockerfile"] == "../Dockerfile"
+    assert container["images"]["base"]["build_context"] == ".."
+
+
+def test_wrangler_container_is_bound_to_its_durable_object():
+    config = _wrangler_config()
+    (container,) = config["containers"]
+
+    bindings = {b["name"]: b["class_name"] for b in config["durable_objects"]["bindings"]}
+    assert bindings["MSFACTORY_CONTAINER"] == container["class_name"]
+    assert config["exports"][container["class_name"]]["type"] == "durable-object"
+
+
+def test_worker_starts_the_container_on_the_port_the_app_binds():
+    """The image exposes 8000 and uvicorn defaults to it; a mismatch here
+    means every request times out against a container that is actually up."""
+    root = Path(__file__).resolve().parents[1]
+    worker = (root / "cloudflare" / "worker.js").read_text()
+    dockerfile = (root / "Dockerfile").read_text()
+
+    assert "const APP_PORT = 8000;" in worker
+    assert "EXPOSE 8000" in dockerfile
+
+
+def test_worker_forwards_the_secrets_the_app_requires():
+    """Settings reads MSFACTORY_* from the environment; the Worker is the only
+    thing that can put them inside the container."""
+    root = Path(__file__).resolve().parents[1]
+    worker = (root / "cloudflare" / "worker.js").read_text()
+
+    assert "MSFACTORY_DATABASE_URL" in worker
+    assert "MSFACTORY_SECRET_KEY" in worker
+    assert "MSFACTORY_TRUST_PROXY_HEADERS" in worker
+
+
+def test_worker_fails_loudly_when_a_secret_is_missing():
+    """A container with no database URL starts, then dies on import. The only
+    symptom is a health-check timeout, so the Worker names the missing secret."""
+    root = Path(__file__).resolve().parents[1]
+    worker = (root / "cloudflare" / "worker.js").read_text()
+
+    assert "Missing Worker secrets" in worker
+    guard = worker.split("Missing Worker secrets")[0]
+    assert "MSFACTORY_DATABASE_URL" in guard
+    assert "MSFACTORY_SECRET_KEY" in guard
+
+
+def test_start_script_migrates_under_an_advisory_lock():
+    """Cloudflare has no pre-deploy hook, so migrations run at container start.
+
+    A cold start and a restart can overlap, so the script must take a lock
+    instead of letting two Alembic runs race on alembic_version. The lock is
+    session-level because a transaction-level one would be released before
+    Alembic runs.
+    """
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "scripts" / "start.sh").read_text()
+
+    assert "pg_advisory_lock" in script
+    assert "pg_advisory_xact_lock" not in script
+    assert "alembic" in script and "upgrade" in script and "head" in script
+    assert "uvicorn" in script
+
+
+def test_start_script_retries_the_connection_itself():
+    """engine.connect() dials the database, so it must live inside the retry.
+
+    Outside it, an unreachable host (a paused Supabase project, a cold pooler)
+    kills the container on the first attempt instead of waiting.
+    """
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "scripts" / "start.sh").read_text()
+
+    retry_start = script.index("while True:")
+    retry_body = script[retry_start : script.index("break", retry_start)]
+    assert "engine.connect()" in retry_body
+
+
+def test_dockerfile_runs_the_start_script():
+    root = Path(__file__).resolve().parents[1]
+    dockerfile = (root / "Dockerfile").read_text()
+
+    assert "COPY scripts/start.sh" in dockerfile
+    assert "scripts/start.sh" in dockerfile.split("CMD", 1)[1]
+
+
+def test_dockerignore_keeps_secrets_out_of_the_image():
+    """The build context is uploaded before the Dockerfile's COPY lines run."""
+    root = Path(__file__).resolve().parents[1]
+    ignored = {
+        line.strip()
+        for line in (root / ".dockerignore").read_text().splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    }
+
+    assert ".env" in ignored
+    assert ".git/" in ignored

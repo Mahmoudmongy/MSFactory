@@ -41,6 +41,9 @@ def run_migrations_online() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        # The Supabase transaction pooler gives every transaction a different
+        # backend; a prepared statement from a previous one is not there.
+        connect_args={"prepare_threshold": None} if settings.uses_transaction_pooler else {},
     )
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)

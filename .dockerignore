@@ -1,0 +1,40 @@
+# Build context exclusions. The Dockerfile copies only app/, static/, legacy/,
+# alembic/ and alembic.ini, but the context is still uploaded to the builder
+# first, so secrets must be excluded here as well as in .gitignore.
+
+.env
+.env.*
+*.pem
+*.key
+
+.git/
+.github/
+.openhands/
+.agent_tmp/
+
+# Tests, docs and local tooling are not part of the runtime image.
+# cloudflare/ holds the Worker that fronts the container; it never runs inside.
+tests/
+cloudflare/
+preview/
+dist/
+docs/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+htmlcov/
+
+# Local database dumps and backups.
+*.db
+*.sqlite3
+*.dump
+*.sql
+backups/
+
+server.log
+*.log
+.DS_Store

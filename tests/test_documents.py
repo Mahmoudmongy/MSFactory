@@ -16,8 +16,8 @@ from decimal import Decimal
 
 import pytest
 
-from app.core.security import create_document_token, create_access_token
-from app.services.documents import line_amounts, render_invoice
+from app.core.security import create_document_token
+from app.services.documents import line_amounts
 from tests.test_api import auth, register
 
 
@@ -103,7 +103,7 @@ class TestPrintToken:
 
     def test_a_token_signed_for_another_company_cannot_read_this_invoice(self, client, setup, db):
         """Tenant isolation must hold even with a validly signed token."""
-        from app.db.models import Company, Invoice
+        from app.db.models import Company
 
         other_company = Company(name="شركة تانية")
         db.add(other_company)
@@ -159,7 +159,7 @@ class TestRenderedDocument:
         invoice = setup["invoice"]
         assert invoice["number"] in html
         assert "مؤسسة النور" in html
-        # Formatted from the invoice itself: 10×2500 +14% tax, plus 5000 −10% discount.
+        # Formatted from the invoice itself: 10x2500 +14% tax, plus 5000 -10% discount.
         assert f"{Decimal(invoice['total']):,.2f}" in html
         assert "فاتورة بيع" in html
 

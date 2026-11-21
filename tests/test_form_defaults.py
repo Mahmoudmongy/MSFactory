@@ -130,5 +130,5 @@ def test_placeholder_contrast_meets_wcag_aa() -> None:
     ink500 = re.findall(r"--ink-500:\s*(#[0-9a-fA-F]{6})", css)
     surface = re.findall(r"--surface:\s*(#[0-9a-fA-F]{6})", css)
     assert len(ink500) == 2 and len(surface) == 2, "expected one light and one dark theme"
-    for ink, background in zip(ink500, surface):
+    for ink, background in zip(ink500, surface, strict=False):
         assert contrast(ink, background) >= 4.5, f"{ink} on {background} is too faint"

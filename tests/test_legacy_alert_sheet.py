@@ -6,7 +6,6 @@ still opens, it just stops carrying the details or the tap-through.
 """
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import pytest

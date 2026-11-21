@@ -59,6 +59,18 @@ class Settings(BaseSettings):
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     @property
+    def uses_transaction_pooler(self) -> bool:
+        """True when the URL points at a PgBouncer-style transaction pooler.
+
+        Supabase's pooler (port 6543) hands each transaction a different
+        backend, so a server-side prepared statement created in one transaction
+        is missing in the next and the query fails with "prepared statement
+        does not exist". psycopg must be told not to prepare.
+        """
+        url = self.database_url
+        return ":6543/" in url or "pooler.supabase.com" in url
+
+    @property
     def is_production(self) -> bool:
         return self.environment.lower() in ("production", "prod")
 
