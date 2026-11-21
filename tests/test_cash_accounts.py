@@ -222,3 +222,79 @@ def test_a_leaf_account_cannot_be_promoted_to_a_group(client):
     )
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "group_account_not_allowed"
+
+
+def test_a_sub_expense_account_can_be_added_under_an_expense_parent(client):
+    """The screen adds any leaf account, not only cash and bank.
+
+    A factory needs its own expense lines — rent for a second workshop, a new
+    utility — and those hang off 5000's children, not off 1010/1020. The API
+    already allowed it; this pins the behaviour the widened sheet relies on.
+    """
+    token = register(client, email="expense@acme.eg")
+    codes = accounts_by_code(client, token)
+    response = _post(
+        client, token,
+        code="5301", name="Workshop Rent", name_ar="إيجار الورشة",
+        type="expense", parent_id=codes["5300"]["id"],
+    )
+    assert response.status_code == 201, response.text
+    created = response.json()
+    assert created["type"] == "expense"
+    assert created["parent_id"] == codes["5300"]["id"]
+
+    after = accounts_by_code(client, token)
+    assert after["5301"]["name_ar"] == "إيجار الورشة"
+
+
+def test_a_sub_income_account_can_be_added_under_an_income_parent(client):
+    token = register(client, email="income@acme.eg")
+    codes = accounts_by_code(client, token)
+    response = _post(
+        client, token,
+        code="4101", name="Export Sales", name_ar="مبيعات التصدير",
+        type="income", parent_id=codes["4100"]["id"],
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["type"] == "income"
+
+
+def _app_js() -> str:
+    from pathlib import Path
+
+    return (Path(__file__).resolve().parent.parent / "static" / "app.js").read_text(encoding="utf-8")
+
+
+def test_the_account_sheet_offers_every_account_type():
+    """A factory adds expense and income lines too, not just cash and bank."""
+    js = _app_js()
+    start = js.index("function openAccountSheet(")
+    end = js.index("// ------------------------------------------------- inventory", start)
+    sheet = js[start:end]
+
+    for type_ in ("asset", "liability", "equity", "income", "expense"):
+        assert type_ in sheet, f"the sheet no longer offers {type_} accounts"
+    assert 'id="acc_type"' in sheet
+    assert "acc_type" in sheet and "acc_kind" not in sheet
+
+
+def test_the_account_sheet_sends_the_chosen_type_not_a_hardcoded_asset():
+    """Posting type: "asset" regardless of the parent is what the API rejects."""
+    js = _app_js()
+    start = js.index("function openAccountSheet(")
+    end = js.index("// ------------------------------------------------- inventory", start)
+    sheet = js[start:end]
+
+    assert 'type: "asset"' not in sheet
+    assert "body: { code, name, name_ar: name, type, parent_id: parentId" in sheet
+
+
+def test_the_account_sheet_still_offers_cash_and_bank_as_parents():
+    """1010/1020 are leaves themselves, so filtering on is_group would drop them."""
+    js = _app_js()
+    start = js.index("function openAccountSheet(")
+    end = js.index("// ------------------------------------------------- inventory", start)
+    sheet = js[start:end]
+
+    assert "filter((a) => a.is_group)" not in sheet
+    assert "a.type === typeSelect.value" in sheet

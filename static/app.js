@@ -181,7 +181,25 @@ export const escapeHtml = (value) =>
 
 const CURRENCY = { EGP: "ج.م", SAR: "ر.س", AED: "د.إ", USD: "$", EUR: "€" };
 
+/** Privacy mode masks every amount on screen, for showing the app to someone. */
+let privacyMode = false;
+
+export function setPrivacyMode(on) {
+  privacyMode = Boolean(on);
+  document.documentElement.dataset.privacy = privacyMode ? "on" : "off";
+  try {
+    localStorage.setItem("msfactory.privacy", privacyMode ? "1" : "0");
+  } catch {
+    /* storage may be blocked; the mask still applies this session */
+  }
+}
+
+export function isPrivacyMode() {
+  return privacyMode;
+}
+
 export function money(value, currency) {
+  if (privacyMode) return "•••••";
   const amount = Number(value ?? 0);
   // Latin digits (1234, not ١٢٣٤) while the currency symbol stays Arabic.
   const formatted = new Intl.NumberFormat("en-US", {
@@ -383,6 +401,8 @@ function appbar({ title, subtitle, back, actions = "" }) {
     <h1 class="appbar__title">${escapeHtml(title)}
       ${subtitle ? `<span class="appbar__sub">${escapeHtml(subtitle)}</span>` : ""}</h1>
     ${actions}
+    <button class="icon-btn" data-toggle-privacy aria-label="إخفاء الأرقام"
+      aria-pressed="${isPrivacyMode()}">${isPrivacyMode() ? "🙈" : "👁"}</button>
     <button class="icon-btn" data-open-theme aria-label="ألوان البرنامج">🎨</button>
     <button class="icon-btn" data-toggle-dark aria-label="تبديل الوضع الليلي">${dark ? "☀" : "☾"}</button>
   </header>`);
@@ -482,6 +502,7 @@ function loadTheme() {
     const saved = JSON.parse(localStorage.getItem("msfactory.theme") || "null");
     if (saved) applyTheme(saved.name, saved.color);
     applyDarkMode(localStorage.getItem("msfactory.dark") === "1");
+    setPrivacyMode(localStorage.getItem("msfactory.privacy") === "1");
   } catch {
     /* ignore */
   }
@@ -2031,8 +2052,9 @@ async function renderReports() {
   try {
     const catalog = await loadReportCatalog();
     const view = el(`<div>
-      <div class="field"><input class="input" type="search" id="report-search"
-        placeholder="ابحث عن تقرير…" autocomplete="off" /></div>
+      <div class="field field--inline"><input class="input" type="search" id="report-search"
+        placeholder="ابحث عن تقرير…" autocomplete="off" />
+        <button class="btn btn--ghost btn--sm" type="button" data-clear-search hidden>مسح</button></div>
       <div data-categories>${catalog.categories
         .map(
           (category) => `<div data-category>
@@ -2061,15 +2083,23 @@ async function renderReports() {
 
     // A live filter: typing hides reports whose name does not match, and hides
     // a category once none of its reports match.
-    view.querySelector("#report-search").addEventListener("input", (event) => {
-      const term = event.target.value.trim();
+    const searchInput = view.querySelector("#report-search");
+    const clearButton = view.querySelector("[data-clear-search]");
+    const applyFilter = (term) => {
       view.querySelectorAll("[data-report]").forEach((node) => {
-        node.hidden = term && !node.dataset.label.includes(term);
+        node.hidden = Boolean(term) && !node.dataset.label.includes(term);
       });
       view.querySelectorAll("[data-category]").forEach((node) => {
         node.hidden = !node.querySelector("[data-report]:not([hidden])");
       });
-    });
+      clearButton.hidden = !term;
+    };
+    searchInput.addEventListener("input", (event) => applyFilter(event.target.value.trim()));
+    clearButton.onclick = () => {
+      searchInput.value = "";
+      applyFilter("");
+      searchInput.focus();
+    };
 
     setScreen(view, { appbar: appbar({ title: "التقارير" }), tabbar: tabbar() });
   } catch (error) {
@@ -2381,66 +2411,71 @@ async function renderAccounts() {
   }
 }
 
-/**
- * Add a cash or bank sub-account.
- *
- * The sheet only offers leaf accounts under 1010/1020 on purpose: the chart's
- * root and group headings are fixed, so there is no "general account" option to
- * pick. The API enforces the same rule, this just keeps the user from meeting
- * an error they could have avoided.
- */
+/* Any leaf account can be added from here, not just cash and bank. The API
+   allows a child under any parent of the same type; it only refuses a group
+   heading or a code outside the parent's branch. So every account of the
+   chosen type is offered as a parent — 1010 and 1020 included, which is where
+   sub-bank accounts like 1021 belong. */
 function openAccountSheet(accounts, onDone) {
-  const assets = accounts.filter((a) => a.type === "asset");
-  const roots = [
-    { value: "1010", label: "نقدية" },
-    { value: "1020", label: "بنك" },
-  ].filter((r) => assets.some((a) => a.code === r.value));
-  if (!roots.length) {
+  if (!accounts.length) {
     toast("دليل الحسابات لم يُهيأ بعد", "error");
     return;
   }
-  const parentOptions = assets
-    .filter((a) => /^10\d\d$/.test(a.code))
-    .map((a) => `<option value="${a.id}">${escapeHtml(a.code)} — ${escapeHtml(a.name_ar || a.name)}</option>`)
+
+  const typeLabel = { asset: "الأصول", liability: "الالتزامات", equity: "حقوق الملكية", income: "الإيرادات", expense: "المصروفات" };
+  const typeOptions = Object.keys(typeLabel)
+    .filter((type) => accounts.some((a) => a.type === type))
+    .map((type) => `<option value="${type}">${typeLabel[type]}</option>`)
     .join("");
 
   const form = el(`<form novalidate>
     <div class="field"><label class="field__label">النوع</label>
-      <select class="select" id="acc_kind">
-        ${roots.map((r) => `<option value="${r.value}">${r.label}</option>`).join("")}
-      </select></div>
+      <select class="select" id="acc_type">${typeOptions}</select></div>
+    <div class="field"><label class="field__label">الحساب الأب</label>
+      <select class="select" id="acc_parent"></select></div>
     <div class="field"><label class="field__label">الاسم</label>
-      <input class="input" id="acc_name" required placeholder="مثال: خزينة الفرع، بنك مصر" /></div>
+      <input class="input" id="acc_name" required placeholder="مثال: خزينة الفرع، مصروف إيجار" /></div>
     <div class="field"><label class="field__label">كود الحساب</label>
       <input class="input num" id="acc_code" placeholder="اتركه فارغاً للتوليد التلقائي" inputmode="numeric" /></div>
-    <div class="field"><label class="field__label">الحساب الأب</label>
-      <select class="select" id="acc_parent">
-        <option value="">حسب النوع (تلقائي)</option>${parentOptions}
-      </select></div>
     <p style="font-size:.8rem;color:var(--ink-500);margin:0 0 12px">
       الحسابات الرئيسية والتجميعية ثابتة ولا تُنشأ من هنا — بتضيف حساب فرعي فقط.
     </p>
     <button class="btn btn--block" type="submit">حفظ الحساب</button>
   </form>`);
 
-  const close = openSheet("حساب نقدية/بنك جديد", form);
+  const typeSelect = form.querySelector("#acc_type");
+  const parentSelect = form.querySelector("#acc_parent");
+
+  // The account's type is taken from its parent — the API rejects a mismatch —
+  // so the parent list follows the type selector.
+  const fillParents = () => {
+    const options = accounts
+      .filter((a) => a.type === typeSelect.value)
+      .sort((a, b) => a.code.localeCompare(b.code));
+    parentSelect.innerHTML = options
+      .map((a) => `<option value="${a.id}">${escapeHtml(a.code)} — ${escapeHtml(a.name_ar || a.name)}</option>`)
+      .join("");
+  };
+  typeSelect.onchange = fillParents;
+  fillParents();
+
+  const close = openSheet("حساب جديد", form);
   form.onsubmit = async (event) => {
     event.preventDefault();
-    const kind = form.querySelector("#acc_kind").value;
+    const type = typeSelect.value;
     const name = form.querySelector("#acc_name").value.trim();
     if (!name) return toast("أدخل اسم الحساب", "error");
-    const chosenParent = form.querySelector("#acc_parent").value;
-    const parentAccount = chosenParent
-      ? assets.find((a) => a.id === Number(chosenParent))
-      : assets.find((a) => a.code === kind);
-    const parent = parentAccount?.id ?? null;
+    const parentId = Number(parentSelect.value);
+    const parentAccount = accounts.find((a) => a.id === parentId);
+    if (!parentAccount) return toast("اختر الحساب الأب", "error");
     // Number the new account by continuing the parent's own code — 1021, 1022
     // under 1020 — because the API rejects a code outside the parent's prefix.
     let code = form.querySelector("#acc_code").value.trim();
     if (!code) {
-      const base = Number(parentAccount?.code ?? kind);
-      const siblings = assets.filter((a) => a.parent_id === parent);
-      const used = new Set(siblings.map((a) => Number(a.code)).filter(Number.isFinite));
+      const base = Number(parentAccount.code);
+      const used = new Set(
+        accounts.filter((a) => a.parent_id === parentId).map((a) => Number(a.code)).filter(Number.isFinite),
+      );
       let candidate = base + 1;
       while (used.has(candidate)) candidate += 1;
       code = String(candidate);
@@ -2448,7 +2483,7 @@ function openAccountSheet(accounts, onDone) {
     try {
       await api("/accounts", {
         method: "POST",
-        body: { code, name, name_ar: name, type: "asset", parent_id: parent, is_group: false },
+        body: { code, name, name_ar: name, type, parent_id: parentId, is_group: false },
       });
       toast("تم إضافة الحساب", "success");
       close();
@@ -2595,6 +2630,7 @@ async function renderInventoryItems(tabs, view) {
             · ${escapeHtml(ITEM_TYPE_LABELS[item.item_type] || item.item_type)}
             ${item.base_unit_id ? ` · ${escapeHtml(unitName(item.base_unit_id))}` : ""}
             ${item.track_inventory ? "" : " · لا يتابع مخزوناً"}</div>
+          ${item.barcode ? `<div class="list__meta num" dir="ltr">${escapeHtml(item.barcode)}</div>` : ""}
         </div>
         <div style="text-align:end">
           <div class="list__value num">${money(item.sale_price)}</div>
@@ -2607,9 +2643,10 @@ async function renderInventoryItems(tabs, view) {
       el(`<div>
         ${subTabs("inv", tabs, view)}
         <div class="card">
-          <div class="field" style="margin:0">
+          <div class="field field--inline" style="margin:0">
             <input class="input" id="item-search" type="search" placeholder="ابحث بالاسم أو الكود"
               value="${escapeHtml(search)}" />
+            ${search ? '<button class="btn btn--ghost btn--sm" type="button" data-clear-search>مسح</button>' : ""}
           </div>
         </div>
         <div class="card card--flush">
@@ -2627,6 +2664,9 @@ async function renderInventoryItems(tabs, view) {
     searchInput?.addEventListener("change", () => {
       const value = searchInput.value.trim();
       location.hash = value ? `#/inventory?inv=items&q=${encodeURIComponent(value)}` : "#/inventory?inv=items";
+    });
+    document.querySelector("[data-clear-search]")?.addEventListener("click", () => {
+      location.hash = "#/inventory?inv=items";
     });
     document.querySelector("[data-new-item]")?.addEventListener("click", () =>
       openItemSheet({ units, warehouses }, () => {
@@ -2646,6 +2686,74 @@ async function renderInventoryItems(tabs, view) {
   }
 }
 
+/** Camera scanner for the barcode field, with a manual fallback.
+
+    BarcodeDetector ships only in Chromium today, so Safari and Firefox get a
+    clear message instead of a dead button. The input stays editable either
+    way, because a cheap USB scanner types into it as a keyboard.
+ */
+function scanBarcode(onValue) {
+  if (!("BarcodeDetector" in window) || !navigator.mediaDevices?.getUserMedia) {
+    toast("الكاميرا غير مدعومة على هذا المتصفح — اكتب الباركود يدوياً", "error");
+    return;
+  }
+  const sheet = el(`<div class="sheet-backdrop"><div class="sheet">
+      <div class="sheet__handle"></div>
+      <h2 class="sheet__title">مسح الباركود</h2>
+      <video class="scan-video" playsinline muted></video>
+      <p class="scan-hint">وجّه الكاميرا نحو الباركود</p>
+      <button class="btn btn--ghost btn--block" type="button" data-stop>إلغاء</button>
+    </div></div>`);
+  const video = sheet.querySelector("video");
+  const stop = () => {
+    video.srcObject?.getTracks().forEach((track) => track.stop());
+    sheet.remove();
+  };
+  sheet.querySelector("[data-stop]").onclick = stop;
+  sheet.addEventListener("click", (event) => {
+    if (event.target === sheet) stop();
+  });
+  document.body.appendChild(sheet);
+
+  const detector = new window.BarcodeDetector();
+  let stopped = false;
+  const tick = async () => {
+    if (stopped || !video.isConnected) return;
+    try {
+      const [found] = await detector.detect(video);
+      if (found?.rawValue) {
+        onValue(found.rawValue);
+        stop();
+        return;
+      }
+    } catch {
+      /* a frame can fail while the camera is still warming up */
+    }
+    requestAnimationFrame(tick);
+  };
+
+  navigator.mediaDevices
+    .getUserMedia({ video: { facingMode: "environment" } })
+    .then((stream) => {
+      video.srcObject = stream;
+      return video.play();
+    })
+    .then(tick)
+    .catch(() => {
+      stop();
+      toast("لم نتمكن من تشغيل الكاميرا — اكتب الباركود يدوياً", "error");
+    });
+  // Stop the camera if the sheet is torn down some other way.
+  const observer = new MutationObserver(() => {
+    if (!sheet.isConnected) {
+      stopped = true;
+      video.srcObject?.getTracks().forEach((track) => track.stop());
+      observer.disconnect();
+    }
+  });
+  observer.observe(document.body, { childList: true });
+}
+
 /** Create or edit an item. Editing loads the detail so variants come along. */
 function openItemSheet({ units, warehouses, itemId }, onDone) {
   const isEdit = Boolean(itemId);
@@ -2654,6 +2762,11 @@ function openItemSheet({ units, warehouses, itemId }, onDone) {
       <input class="input" name="name_ar" required placeholder="مثال: ورق A4" /></div>
     <div class="field"><label class="field__label">الكود</label>
       <input class="input num" name="code" placeholder="اتركه فارغاً للتوليد التلقائي" /></div>
+    <div class="field"><label class="field__label">الباركود</label>
+      <div class="field--inline">
+        <input class="input num" name="barcode" inputmode="numeric" placeholder="امسح الباركود أو اكتبه" />
+        <button class="btn btn--ghost" type="button" data-scan-barcode>📷</button>
+      </div></div>
     <div class="field"><label class="field__label">النوع</label>
       <select class="select" name="item_type">
         ${Object.entries(ITEM_TYPE_LABELS)
@@ -2693,6 +2806,12 @@ function openItemSheet({ units, warehouses, itemId }, onDone) {
 
   const close = openSheet(isEdit ? "تعديل الصنف" : "صنف جديد", form);
 
+  form.querySelector("[data-scan-barcode]").onclick = () =>
+    scanBarcode((value) => {
+      form.elements.barcode.value = value;
+      toast("تم قراءة الباركود", "success");
+    });
+
   if (isEdit) {
     api(`/inventory/items/${itemId}`)
       .then((item) => {
@@ -2723,6 +2842,7 @@ function openItemSheet({ units, warehouses, itemId }, onDone) {
       purchase_price: Number(data.get("purchase_price") || 0),
       sale_price: Number(data.get("sale_price") || 0),
       reorder_level: Number(data.get("reorder_level") || 0),
+      barcode: String(data.get("barcode") || "").trim(),
       track_inventory: form.elements.track_inventory.checked,
     };
     if (!body.code) delete body.code; // let the server number it
@@ -4236,6 +4356,13 @@ document.addEventListener("click", (event) => {
   if (event.target.closest("[data-close-sidebar]")) toggleSidebar(false);
   if (event.target.closest("[data-logout]")) logout();
   if (event.target.closest("[data-open-theme]")) openThemePicker();
+  if (event.target.closest("[data-toggle-privacy]")) {
+    const on = !isPrivacyMode();
+    setPrivacyMode(on);
+    event.target.closest("[data-toggle-privacy]").textContent = on ? "🙈" : "👁";
+    event.target.closest("[data-toggle-privacy]").setAttribute("aria-pressed", String(on));
+    route();
+  }
   if (event.target.closest("[data-subtab]")) {
     const [group, key] = event.target.closest("[data-subtab]").dataset.subtab.split(":");
     const [path] = location.hash.split("?");

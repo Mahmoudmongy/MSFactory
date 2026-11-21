@@ -9,7 +9,7 @@ from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import Select, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from ..core.errors import ConflictError, NotFoundError
 from ..db.models import (
@@ -127,7 +127,11 @@ class ItemRepository:
         group_id: int | None = None,
         include_inactive: bool = False,
     ) -> list[Item]:
-        stmt = scoped(select(Item), Item, self.company_id).order_by(Item.code)
+        stmt = (
+            scoped(select(Item), Item, self.company_id)
+            .options(selectinload(Item.variants))
+            .order_by(Item.code)
+        )
         if search:
             like = f"%{search.strip()}%"
             stmt = stmt.where(Item.name.ilike(like) | Item.code.ilike(like) | Item.name_ar.ilike(like))
@@ -140,7 +144,11 @@ class ItemRepository:
         return list(self.db.scalars(stmt))
 
     def get(self, item_id: int) -> Item:
-        item = self.db.scalar(scoped(select(Item).where(Item.id == item_id), Item, self.company_id))
+        item = self.db.scalar(
+            scoped(select(Item).where(Item.id == item_id), Item, self.company_id).options(
+                selectinload(Item.variants)
+            )
+        )
         if not item:
             raise NotFoundError("Item not found")
         return item

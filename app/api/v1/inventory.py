@@ -150,6 +150,7 @@ def create_item(
         default_warehouse_id=payload.default_warehouse_id,
         image_url=payload.image_url,
         notes=payload.notes,
+        barcode=payload.barcode,
     )
     db.commit()
     return ItemDetailOut.model_validate(
@@ -179,7 +180,12 @@ def update_item(
 ):
     repo = ItemRepository(db, principal.company_id)
     item = repo.get(item_id)
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    changes = payload.model_dump(exclude_unset=True)
+    # barcode is not a column: it is the first variant's code, so it is set
+    # through the property rather than through setattr on the item.
+    if "barcode" in changes:
+        item.barcode = changes.pop("barcode") or ""
+    for key, value in changes.items():
         setattr(item, key, value)
     db.flush()
     db.commit()
