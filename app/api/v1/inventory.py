@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ...core.permissions import Permission
+from ...core.security import DOCUMENT_TOKEN_MINUTES, create_document_token
 from ...db.models import ItemGroup, StockMovement, UnitOfMeasure
 from ...db.session import get_session
 from ...repositories.inventory import ItemRepository, UnitRepository, WarehouseRepository
@@ -227,6 +228,23 @@ def add_variant(
 
 
 # -------------------------------------------------------------- warehouses
+
+
+@router.post("/item-labels/print-token")
+def item_labels_print_token(
+    principal: Principal = Depends(require(Permission.STOCK_VIEW)),
+):
+    """Mint a link that opens the barcode label sheet.
+
+    The token names the sheet, not the items: a batch of item ids is too long to
+    put in a JWT, so the ids ride in the query string and the route re-checks
+    each one against the token's company.
+    """
+    token = create_document_token(principal.user.id, principal.company_id, "item_labels", 0)
+    return {
+        "path": f"/documents/item-labels?t={token}",
+        "expires_in": DOCUMENT_TOKEN_MINUTES * 60,
+    }
 
 
 @router.get("/warehouses", response_model=list[WarehouseOut])

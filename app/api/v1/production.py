@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
 from ...core.permissions import Permission
+from ...core.security import DOCUMENT_TOKEN_MINUTES, create_document_token
 from ...db.session import get_session
 from ...services.production import ProductionService
 from ..v1.deps import Principal, require
@@ -37,6 +38,28 @@ def get_work_order(
     db: Session = Depends(get_session),
 ):
     return _service(principal, db).get(work_order_id)
+
+
+@router.post("/work-orders/{work_order_id}/print-token")
+def work_order_print_token(
+    work_order_id: int,
+    principal: Principal = Depends(require(Permission.PRODUCTION_VIEW)),
+    db: Session = Depends(get_session),
+):
+    """Mint a one-document link for the shop-floor copy of a work order.
+
+    Same reasoning as the invoice and voucher links: the access token stays out
+    of the URL, and the returned token opens this one order and expires in
+    minutes.
+    """
+    _service(principal, db).get(work_order_id)
+    token = create_document_token(
+        principal.user.id, principal.company_id, "work_order", work_order_id
+    )
+    return {
+        "path": f"/documents/work-order/{work_order_id}?t={token}",
+        "expires_in": DOCUMENT_TOKEN_MINUTES * 60,
+    }
 
 
 @router.post("/work-orders", response_model=WorkOrderOut, status_code=status.HTTP_201_CREATED)

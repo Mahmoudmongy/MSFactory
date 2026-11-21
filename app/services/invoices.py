@@ -64,8 +64,14 @@ class InvoiceService:
         self.accounting = AccountingService(db, company_id, user_id)
         self.inventory = InventoryService(db, company_id, user_id)
 
-    def list(self, kind: str | None = None, contact_id: int | None = None) -> list[Invoice]:
-        return self.invoices.list(kind=kind, contact_id=contact_id)
+    def list(
+        self,
+        kind: str | None = None,
+        contact_id: int | None = None,
+        start: date | None = None,
+        end: date | None = None,
+    ) -> list[Invoice]:
+        return self.invoices.list(kind=kind, contact_id=contact_id, start=start, end=end)
 
     def returns_of(self, invoice_id: int) -> list[Invoice]:
         return self.invoices.returns_of(invoice_id)
