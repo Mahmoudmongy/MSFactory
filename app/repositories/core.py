@@ -94,10 +94,12 @@ class ContactRepository:
         self.db = db
         self.company_id = company_id
 
-    def list(self, kind: str | None = None) -> list[Contact]:
+    def list(self, kind: str | None = None, include_inactive: bool = False) -> list[Contact]:
         stmt = scoped(select(Contact), Contact, self.company_id).order_by(Contact.name)
         if kind:
             stmt = stmt.where(Contact.kind.in_((kind, "both")))
+        if not include_inactive:
+            stmt = stmt.where(Contact.is_active.is_(True))
         return list(self.db.scalars(stmt))
 
     def get(self, contact_id: int) -> Contact:

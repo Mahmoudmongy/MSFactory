@@ -6,7 +6,7 @@
  * against a newer API is a real failure mode) while still giving an offline
  * launch. API responses are never cached: a stale balance is worse than none. */
 
-const CACHE = "msfactory-shell-v3";
+const CACHE = "msfactory-shell-v15";
 const SHELL = ["/", "/static/index.html", "/static/styles.css", "/static/app.js", "/static/icon.svg"];
 
 /** Cache lookups ignore the ?v= cache-buster so one entry serves all versions. */

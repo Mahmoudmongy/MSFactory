@@ -192,6 +192,56 @@ def test_stock_count_shortage_books_shrinkage(db, company):
     assert inv.inventory_value() == D("85.00")
 
 
+def _inventory_account_balance(db, company_id: int) -> Decimal:
+    from sqlalchemy import func, select
+
+    from app.db.models import Account, JournalLine
+
+    return db.scalar(
+        select(
+            func.coalesce(func.sum(JournalLine.debit - JournalLine.credit), 0)
+        )
+        .join(Account, Account.id == JournalLine.account_id)
+        .where(Account.company_id == company_id, Account.code == "1200")
+    )
+
+
+def test_a_standalone_receipt_posts_inventory_against_capital(db, company):
+    """An opening balance must reach the ledger, not cancel itself out.
+
+    The counterpart used to default to the inventory account, which posted a
+    debit and a credit to 1200 and left the balance sheet showing no stock.
+    """
+    entity, uid = company
+    inv = svc(db, entity, uid)
+    item = inv.create_item(name="رصيد افتتاحي")
+    raw = inv.warehouses.by_code("RAW")
+
+    inv.receive(item_id=item.id, warehouse_id=raw.id, quantity=10, unit_cost=D("30"),
+                movement_date=date(2026, 1, 1), reference="رصيد افتتاحي")
+    db.commit()
+
+    assert _inventory_account_balance(db, entity.id) == D("300.0000")
+    assert inv.inventory_value() == D("300.00")
+
+
+def test_an_outbound_movement_without_a_counterpart_books_shrinkage(db, company):
+    entity, uid = company
+    inv = svc(db, entity, uid)
+    item = inv.create_item(name="صنف تالف")
+    raw = inv.warehouses.by_code("RAW")
+    inv.receive(item_id=item.id, warehouse_id=raw.id, quantity=10, unit_cost=D("10"),
+                movement_date=date(2026, 1, 1))
+    db.commit()
+
+    inv.issue(item_id=item.id, warehouse_id=raw.id, quantity=4,
+              movement_date=date(2026, 1, 5), kind="damage")
+    db.commit()
+
+    # 100 in, 40 written off: 60 must remain on the inventory account.
+    assert _inventory_account_balance(db, entity.id) == D("60.0000")
+
+
 def test_on_hand_rows_report_colour_and_value(db, company):
     entity, uid = company
     inv = svc(db, entity, uid)
@@ -291,3 +341,136 @@ def test_weighted_average_keeps_valuation_equal_to_quantity_times_average(db, co
     assert on_hand == D("30.0000")
     assert inv.inventory_value() == D("30") * (expected_value / D("100"))
 
+
+
+# --- per-warehouse balances -------------------------------------------------
+# Layers are company-wide per item, but a movement happens in one warehouse.
+# Checking only the company total let a storekeeper empty a warehouse and push
+# its balance negative while the books still looked healthy.
+
+
+def test_issue_from_an_empty_warehouse_is_rejected(db, company):
+    entity, uid = company
+    inv = svc(db, entity, uid)
+    item = inv.create_item(name="سلك")
+    raw = inv.warehouses.by_code("RAW")
+    fabric = inv.warehouses.by_code("FABRIC")
+    inv.receive(item_id=item.id, warehouse_id=raw.id, quantity=10, unit_cost=D("5"),
+                movement_date=date(2026, 1, 1), post_journal=False)
+    db.commit()
+
+    # The company holds 10, but FABRIC holds none of it.
+    with pytest.raises(ValidationError, match="رصيد المخزن"):
+        inv.issue(item_id=item.id, warehouse_id=fabric.id, quantity=3,
+                  movement_date=date(2026, 1, 2), post_journal=False)
+
+
+def test_issue_cannot_exceed_the_warehouse_balance(db, company):
+    entity, uid = company
+    inv = svc(db, entity, uid)
+    item = inv.create_item(name="مسمار")
+    raw = inv.warehouses.by_code("RAW")
+    inv.receive(item_id=item.id, warehouse_id=raw.id, quantity=10, unit_cost=D("2"),
+                movement_date=date(2026, 1, 1), post_journal=False)
+    db.commit()
+
+    # Either guard may fire first — the company total and this warehouse both
+    # hold 10 — but it must never succeed.
+    with pytest.raises(ValidationError, match=r"الرصيد المتاح|رصيد المخزن"):
+        inv.issue(item_id=item.id, warehouse_id=raw.id, quantity=11,
+                  movement_date=date(2026, 1, 2), post_journal=False)
+
+
+def test_transfer_cannot_empty_a_warehouse_it_does_not_hold(db, company):
+    entity, uid = company
+    inv = svc(db, entity, uid)
+    item = inv.create_item(name="خيط")
+    raw = inv.warehouses.by_code("RAW")
+    fabric = inv.warehouses.by_code("FABRIC")
+    inv.receive(item_id=item.id, warehouse_id=raw.id, quantity=10, unit_cost=D("3"),
+                movement_date=date(2026, 1, 1), post_journal=False)
+    db.commit()
+
+    with pytest.raises(ValidationError, match="رصيد المخزن"):
+        inv.transfer(item_id=item.id, from_warehouse_id=fabric.id, to_warehouse_id=raw.id,
+                     quantity=5, movement_date=date(2026, 1, 4))
+
+
+def test_damage_write_off_cannot_exceed_the_warehouse_balance(db, company):
+    entity, uid = company
+    inv = svc(db, entity, uid)
+    item = inv.create_item(name="زجاج")
+    raw = inv.warehouses.by_code("RAW")
+    fabric = inv.warehouses.by_code("FABRIC")
+    inv.receive(item_id=item.id, warehouse_id=raw.id, quantity=10, unit_cost=D("7"),
+                movement_date=date(2026, 1, 1), post_journal=False)
+    db.commit()
+
+    with pytest.raises(ValidationError, match="رصيد المخزن"):
+        inv.write_off_damaged(item_id=item.id, warehouse_id=fabric.id, quantity=1,
+                              movement_date=date(2026, 1, 5), reason="كسر")
+
+
+def test_stock_count_measures_one_warehouse(db, company):
+    entity, uid = company
+    inv = svc(db, entity, uid)
+    item = inv.create_item(name="خشب")
+    raw = inv.warehouses.by_code("RAW")
+    fabric = inv.warehouses.by_code("FABRIC")
+    inv.receive(item_id=item.id, warehouse_id=raw.id, quantity=40, unit_cost=D("10"),
+                movement_date=date(2026, 1, 1), post_journal=False)
+    inv.transfer(item_id=item.id, from_warehouse_id=raw.id, to_warehouse_id=fabric.id,
+                 quantity=15, movement_date=date(2026, 1, 2))
+    db.commit()
+
+    # RAW holds 25. Counting 30 there is a surplus of 5, not a shortage of 25 —
+    # the company total (40) must not leak into the comparison.
+    inv.adjust(item_id=item.id, warehouse_id=raw.id, counted_quantity=30,
+               movement_date=date(2026, 1, 3))
+    db.commit()
+
+    by_warehouse = {r["warehouse_id"]: r["quantity"] for r in inv.stock_on_hand(item_id=item.id)}
+    assert by_warehouse[raw.id] == D("30.0000")
+    assert by_warehouse[fabric.id] == D("15.0000")
+    assert inv.layers.quantity_on_hand(item.id) == D("45.0000")
+
+
+def test_stock_count_shortage_only_touches_the_counted_warehouse(db, company):
+    entity, uid = company
+    inv = svc(db, entity, uid)
+    item = inv.create_item(name="رمل")
+    raw = inv.warehouses.by_code("RAW")
+    fabric = inv.warehouses.by_code("FABRIC")
+    inv.receive(item_id=item.id, warehouse_id=raw.id, quantity=40, unit_cost=D("4"),
+                movement_date=date(2026, 1, 1), post_journal=False)
+    inv.transfer(item_id=item.id, from_warehouse_id=raw.id, to_warehouse_id=fabric.id,
+                 quantity=15, movement_date=date(2026, 1, 2))
+    db.commit()
+
+    inv.adjust(item_id=item.id, warehouse_id=raw.id, counted_quantity=20,
+               movement_date=date(2026, 1, 3))
+    db.commit()
+
+    by_warehouse = {r["warehouse_id"]: r["quantity"] for r in inv.stock_on_hand(item_id=item.id)}
+    assert by_warehouse[raw.id] == D("20.0000")
+    assert by_warehouse[fabric.id] == D("15.0000")
+
+
+def test_no_warehouse_balance_goes_negative_through_the_ledger(db, company):
+    entity, uid = company
+    inv = svc(db, entity, uid)
+    item = inv.create_item(name="حديد")
+    raw = inv.warehouses.by_code("RAW")
+    fabric = inv.warehouses.by_code("FABRIC")
+    inv.receive(item_id=item.id, warehouse_id=raw.id, quantity=20, unit_cost=D("6"),
+                movement_date=date(2026, 1, 1), post_journal=False)
+    db.commit()
+
+    for warehouse in (raw, fabric):
+        with pytest.raises(ValidationError):
+            inv.issue(item_id=item.id, warehouse_id=warehouse.id, quantity=21,
+                      movement_date=date(2026, 1, 2), post_journal=False)
+
+    db.rollback()
+    by_warehouse = {r["warehouse_id"]: r["quantity"] for r in inv.stock_on_hand(item_id=item.id)}
+    assert all(q >= 0 for q in by_warehouse.values()), by_warehouse

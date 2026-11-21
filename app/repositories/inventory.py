@@ -90,6 +90,13 @@ class WarehouseRepository:
         self.db.flush()
         return warehouse
 
+    def children_of(self, warehouse_id: int) -> list[Warehouse]:
+        """Direct children only — used to block deleting a parent node."""
+        stmt = scoped(
+            select(Warehouse).where(Warehouse.parent_id == warehouse_id), Warehouse, self.company_id
+        )
+        return list(self.db.scalars(stmt))
+
     def descendant_ids(self, warehouse_id: int) -> list[int]:
         """This warehouse plus every warehouse beneath it, at any depth."""
         children: dict[int | None, list[int]] = {}
@@ -232,6 +239,23 @@ class StockLayerRepository:
         )
         if variant_id is not None:
             stmt = stmt.where(StockLayer.variant_id == variant_id)
+        return Decimal(str(self.db.scalar(stmt) or 0)).quantize(FOUR)
+
+    def quantity_in_warehouse(
+        self, item_id: int, warehouse_id: int, variant_id: int | None = None
+    ) -> Decimal:
+        """Quantity of an item sitting in one warehouse.
+
+        Layers are company-wide per item (a transfer must not revalue), so the
+        per-warehouse figure has to come from the movement ledger instead.
+        """
+        stmt = select(func.coalesce(func.sum(StockMovement.quantity), 0)).where(
+            StockMovement.company_id == self.company_id,
+            StockMovement.item_id == item_id,
+            StockMovement.warehouse_id == warehouse_id,
+        )
+        if variant_id is not None:
+            stmt = stmt.where(StockMovement.variant_id == variant_id)
         return Decimal(str(self.db.scalar(stmt) or 0)).quantize(FOUR)
 
     def value_on_hand(self, *, item_id: int | None = None, warehouse_id: int | None = None) -> Decimal:

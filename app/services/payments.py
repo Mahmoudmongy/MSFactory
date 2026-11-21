@@ -15,6 +15,9 @@ from .accounting import AccountingService
 
 ZERO = Decimal("0.00")
 
+# Payment direction is stored in English; the audit trail shows the Arabic word.
+PAYMENT_KIND_AR = {"receive": "سند قبض", "spend": "سند دفع"}
+
 
 class PaymentService:
     def __init__(self, db: Session, company_id: int, user_id: int | None = None):
@@ -103,7 +106,7 @@ class PaymentService:
             entity_type="payment",
             entity_id=payment.id,
             user_id=self.user_id,
-            summary=f"{kind} {number} {amount} for {contact.name}",
+            summary=f"{PAYMENT_KIND_AR.get(kind, kind)} {number} بمبلغ {amount} لـ {contact.name}",
         )
         return payment
 
@@ -176,6 +179,6 @@ class PaymentService:
             entity_type="payment",
             entity_id=payment.id,
             user_id=self.user_id,
-            summary=f"Reversed {payment.number}: {reason}",
+            summary=f"عكس السند {payment.number}: {reason}",
         )
         self.db.flush()

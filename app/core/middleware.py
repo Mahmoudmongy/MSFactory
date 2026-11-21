@@ -17,6 +17,25 @@ from .redis_client import get_redis, redis_available
 
 _redis_ok: bool | None = None
 
+# Behind a proxy (Cloudflare, Fly, any load balancer) every request arrives from
+# the proxy's address, so limiting on the socket peer would put all users in one
+# bucket. The forwarded headers are only read when the deployment says a trusted
+# proxy is in front: otherwise any client could set them and pick its own key.
+_CLIENT_IP_HEADERS = ("cf-connecting-ip", "x-real-ip", "x-forwarded-for")
+
+
+def _client_ip(request: Request) -> str:
+    if settings.trust_proxy_headers:
+        for header in _CLIENT_IP_HEADERS:
+            value = request.headers.get(header)
+            if not value:
+                continue
+            # X-Forwarded-For is a chain; the first entry is the original client.
+            candidate = value.split(",")[0].strip()
+            if candidate:
+                return candidate
+    return request.client.host if request.client else "unknown"
+
 
 def _limit_for(path: str) -> int:
     if path.endswith("/auth/login") or path.endswith("/auth/register"):
@@ -35,7 +54,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if not _redis_ok:
             return await call_next(request)
 
-        client = request.client.host if request.client else "unknown"
+        client = _client_ip(request)
         window = int(time.time() // 60)
         key = f"rl:{client}:{window}"
         try:

@@ -1,0 +1,168 @@
+/* Summary charts. Palette is inherited from the accent colour so the charts
+ * follow whichever theme the user picked. */
+.dash-grid{display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:12px}
+@media(min-width:760px){.dash-grid{grid-template-columns:1fr 1fr}}
+/* A data table needs the whole row: five columns in a half-width column
+   forces a horizontal scrollbar on a screen that has room to spare. */
+@media(min-width:760px){.dash-grid>.dash-card:has(> .factory-table-scroll){grid-column:1/-1}}
+.dash-card{margin-bottom:0}
+.dash-legend{display:flex;flex-wrap:wrap;gap:12px;margin:2px 0 6px;font-size:12px;color:var(--mu)}
+.dash-legend span{display:inline-flex;align-items:center;gap:5px}
+.dash-legend i{width:10px;height:10px;border-radius:3px;display:inline-block}
+.dash-svg{display:block;width:100%;height:auto;overflow:visible}
+.dash-grid line.dash-grid{stroke:var(--bd);stroke-width:1;stroke-dasharray:3 4}
+.dash-axis{stroke:var(--bd);stroke-width:1}
+.dash-tick{fill:var(--mu);font-size:12px}
+.dash-val{fill:var(--mu);font-size:12px}
+.dash-insight{margin:8px 0 0;font-size:12.5px;line-height:1.65;color:var(--mu);background:var(--bg);border-radius:8px;padding:8px 10px}
+.dash-hbars{list-style:none;margin:0;padding:0;display:grid;gap:9px}
+.dash-hbar-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:13px;margin-bottom:4px}
+.dash-hbar-head b{font-variant-numeric:tabular-nums;font-size:13px;white-space:nowrap}
+.dash-hbar-head b small{color:var(--mu);font-weight:400;font-size:12px}
+.dash-track{display:block;height:8px;background:var(--pr2);border-radius:99px;overflow:hidden}
+.dash-track i{display:block;height:100%;background:var(--pr);border-radius:99px;min-width:3px}
+.dash-empty{margin:0;padding:14px 4px;color:var(--mu);font-size:13px;text-align:center}
+
+/* Dedicated dashboard screen. */
+.dash-kpis{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:12px}
+@media(min-width:760px){.dash-kpis{grid-template-columns:repeat(4,minmax(0,1fr))}}
+.dash-kpi{display:flex;flex-direction:column;gap:3px;text-align:start;background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:12px;margin:0;cursor:default;font:inherit;color:var(--tx)}
+button.dash-kpi{cursor:pointer}
+button.dash-kpi:hover{border-color:var(--pr)}
+.dash-kpi-title{font-size:12.5px;color:var(--mu)}
+.dash-kpi-value{font-size:17px;font-variant-numeric:tabular-nums;line-height:1.3;word-break:break-word}
+.dash-kpi-value small{font-size:12px;color:var(--mu);font-weight:400}
+.dash-kpi-note{font-size:12px;color:var(--mu);line-height:1.4}
+.dash-kpi-warn .dash-kpi-value{color:var(--warn)}
+:root[data-theme="dark"] .dash-kpi-warn .dash-kpi-value{color:#fbbf24}
+.dash-alerts{display:grid;gap:8px}
+.dash-alert{border:1px solid var(--bd);border-radius:9px;padding:10px 12px;background:var(--bg)}
+.dash-alert-warn{border-color:#f59e0b55;background:#f59e0b0f}
+.dash-alert-head{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px}
+.dash-alert-head span{font-variant-numeric:tabular-nums;font-weight:700;color:var(--pr)}
+.dash-alert p{margin:4px 0 0;font-size:12px;color:var(--mu);line-height:1.5}
+.dash-facts{list-style:none;margin:0;padding:0;display:grid;gap:7px}
+.dash-facts li{display:flex;justify-content:space-between;align-items:baseline;gap:10px;font-size:13px;padding-bottom:6px;border-bottom:1px dashed var(--bd)}
+.dash-facts li:last-child{border-bottom:0;padding-bottom:0}
+.dash-facts b{font-variant-numeric:tabular-nums;white-space:nowrap}
+.dash-facts b.dash-ok{color:var(--ok)}
+.dash-facts b.dash-warn{color:var(--warn)}
+.dash-details{margin-top:8px;border-top:1px solid var(--bd);padding-top:8px}
+.dash-details summary{cursor:pointer;font-size:12.5px;color:var(--pr);margin-bottom:8px}
+.dash-table{font-size:13px}
+.dash-table tr[role="button"]{cursor:pointer}
+.dash-table tr[role="button"]:hover td{background:var(--pr2)}
+.dash-amount{font-variant-numeric:tabular-nums;white-space:nowrap}
+@media(max-width:520px){
+  .dash-kpi-value{font-size:15px}
+  .dash-kpi{padding:10px}
+}
+
+/* A grid item defaults to min-width:auto, so a wide chart or table would push the
+ * column past the phone viewport instead of shrinking. Let every panel shrink. */
+.dash-grid>*,.dash-kpis>*,.factory-summary-panels>*,.factory-kpis>*{min-width:0}
+.dash-card,.dash-kpi{min-width:0;max-width:100%}
+.dash-svg,.dash-hbars,.dash-alerts,.dash-facts{min-width:0;max-width:100%}
+
+/* Charts scale with the card instead of being locked to a 340px viewBox. */
+.dash-svg{width:100%;height:auto;display:block}
+.dash-donut{display:grid;grid-template-columns:132px minmax(0,1fr);gap:14px;align-items:center}
+.dash-donut-svg{width:132px;height:132px;flex:none}
+.dash-donut-pct{font-size:15px;font-weight:800;fill:#fff}
+.dash-donut-center{font-size:15px;font-weight:700;fill:var(--tx)}
+.dash-donut-sub{font-size:12px;fill:var(--mu)}
+.dash-donut-legend{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:7px;min-width:0}
+.dash-donut-legend li{display:flex;align-items:center;gap:7px;font-size:13px;min-width:0}
+.dash-donut-legend i{flex:none;width:10px;height:10px;border-radius:3px}
+.dash-donut-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--mu)}
+.dash-donut-legend b{flex:none;font-variant-numeric:tabular-nums;font-weight:600}
+.dash-donut-legend b small{color:var(--mu);font-weight:400;font-size:12px}
+@media(max-width:420px){
+  .dash-donut{grid-template-columns:112px minmax(0,1fr);gap:10px}
+  .dash-donut-svg{width:112px;height:112px}
+  .dash-donut-legend li{font-size:12.5px;gap:6px;align-items:flex-start}
+  /* Narrow legends wrap instead of cutting the account name mid-word. */
+  .dash-donut-name{white-space:normal;overflow:visible;text-overflow:clip;
+                   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+}
+
+/* Alert details: bottom sheet on phones, centred dialog on wide screens.
+   Colours come from tokens so the sheet follows the active theme. */
+.dash-alert{width:100%;text-align:start;display:block;cursor:pointer;
+            font:inherit;color:inherit;background:var(--card,#fff);
+            border:1px solid var(--bd,var(--bd));border-radius:12px;
+            padding:12px 13px;transition:border-color .15s ease,box-shadow .15s ease}
+.dash-alert:hover,.dash-alert:focus-visible{border-color:var(--pr);box-shadow:0 2px 10px rgba(16,32,42,.08)}
+.dash-alert:focus-visible{outline:2px solid var(--pr);outline-offset:2px}
+.dash-alert-more{display:inline-flex;align-items:center;gap:4px;margin-top:7px;
+                 font-size:12px;font-weight:700;color:var(--pr)}
+body.factory-sheet-open{overflow:hidden}
+.factory-sheet{position:fixed;inset:0;z-index:100600;display:flex;align-items:flex-end;
+               justify-content:center;background:rgba(9,20,30,.44)}
+.factory-sheet-panel{width:100%;max-height:82vh;display:flex;flex-direction:column;
+                     background:var(--card,#fff);color:var(--tx,var(--tx));
+                     border-radius:16px 16px 0 0;box-shadow:0 -8px 30px rgba(9,20,30,.22);
+                     animation:sheetUp .2s ease-out}
+@keyframes sheetUp{from{transform:translateY(14px);opacity:.7}to{transform:none;opacity:1}}
+.factory-sheet-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;
+                    padding:14px 16px;border-bottom:1px solid var(--bd,var(--bd))}
+.factory-sheet-head b{display:block;font-size:16px}
+.factory-sheet-head span{display:block;margin-top:2px;font-size:12.5px;color:var(--mu,var(--mu))}
+.factory-sheet-close{flex:none;width:40px;height:40px;min-height:40px;border-radius:10px;
+                     border:1px solid var(--bd,var(--bd));background:transparent;color:inherit;
+                     font-size:16px;cursor:pointer}
+.factory-sheet-close:hover{border-color:var(--pr);color:var(--pr)}
+.factory-sheet-body{overflow:auto;padding:10px 12px calc(14px + env(safe-area-inset-bottom))}
+.factory-sheet-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.factory-sheet-list button{width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto;
+                           grid-template-areas:"title value" "meta value";gap:2px 12px;
+                           align-items:center;text-align:start;font:inherit;color:inherit;
+                           background:transparent;border:1px solid var(--bd,var(--bd));
+                           border-radius:11px;padding:10px 12px;cursor:pointer}
+.factory-sheet-list button:hover,.factory-sheet-list button:focus-visible{border-color:var(--pr);background:var(--pr2)}
+.factory-sheet-list button:focus-visible{outline:2px solid var(--pr);outline-offset:2px}
+.factory-sheet-title{grid-area:title;font-weight:700;font-size:14px;overflow-wrap:anywhere}
+.factory-sheet-meta{grid-area:meta;font-size:12.5px;color:var(--mu,var(--mu));overflow-wrap:anywhere}
+.factory-sheet-list b{grid-area:value;font-variant-numeric:tabular-nums;white-space:nowrap;font-size:14px}
+@media(min-width:861px){
+  .factory-sheet{align-items:center}
+  .factory-sheet-panel{max-width:560px;max-height:76vh;border-radius:16px}
+  .factory-sheet-body{padding:12px 16px 16px}
+}
+
+/* Donut percentage labels live inside the SVG viewBox, so the rendered size is
+   the declared size times the card-to-viewBox scale. Declaring 15px rendered
+   about 10px in a narrow card; this keeps the painted size at ~12px. */
+.dash-donut-svg .dash-donut-pct { font-size: 17px; font-weight: 800; }
+.dash-donut-svg .dash-donut-center { font-size: 16px; }
+.dash-donut-svg .dash-donut-sub { font-size: 15px; }
+@media (max-width: 420px) {
+  .dash-donut-svg .dash-donut-pct { font-size: 18px; }
+}
+
+/* ---- Alert detail sheet ------------------------------------------------
+   A floating window, not a full page: on a phone it rises from the bottom
+   (thumb reach), on a desktop it centres as a card. Each row shows the whole
+   movement and taps through to that exact document. */
+.factory-sheet-list button.factory-sheet-row{
+  display:grid;grid-template-columns:minmax(0,1fr) auto;
+  grid-template-areas:"title value" "meta value" "fields fields" "open open";
+  gap:4px 12px;align-items:start;cursor:pointer}
+.factory-sheet-fields{
+  grid-area:fields;margin:8px 0 0;padding:9px 0 0;border-top:1px dashed var(--bd,var(--bd));
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:6px 14px}
+.factory-sheet-fields>div{display:flex;flex-direction:column;gap:1px;min-width:0}
+.factory-sheet-fields dt{font-size:11.5px;color:var(--mu,var(--mu));font-weight:600}
+.factory-sheet-fields dd{margin:0;font-size:13px;overflow-wrap:anywhere}
+.factory-sheet-fields>div.is-strong dd{font-weight:800;font-variant-numeric:tabular-nums}
+.factory-sheet-fields dd.is-warn{color:var(--warn,#a15c00);font-weight:700}
+.factory-sheet-open{
+  grid-area:open;display:inline-flex;align-items:center;gap:4px;margin-top:7px;
+  font-size:12px;font-weight:700;color:var(--pr)}
+/* 44px touch targets and a taller scroll area on phones. */
+@media(max-width:860px){
+  .factory-sheet-panel{max-height:88vh}
+  .factory-sheet-body{padding-bottom:calc(18px + env(safe-area-inset-bottom))}
+  .factory-sheet-list button.factory-sheet-row{min-height:44px;padding:12px 13px}
+  .factory-sheet-fields{grid-template-columns:repeat(auto-fit,minmax(110px,1fr))}
+}

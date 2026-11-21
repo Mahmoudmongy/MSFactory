@@ -17,6 +17,21 @@ from ..repositories.core import AuditRepository, SettingRepository
 
 TAX_KINDS = ("vat", "withholding", "other")
 
+# A data URL for a downscaled logo. The UI keeps images small, but a client
+# could still post something huge, and every settings read would carry it.
+LOGO_MAX_CHARS = 400_000
+LOGO_PREFIXES = ("data:image/png;base64,", "data:image/jpeg;base64,", "data:image/webp;base64,")
+
+
+def _check_logo(value: str) -> None:
+    text = str(value or "")
+    if not text:
+        return
+    if not text.startswith(LOGO_PREFIXES):
+        raise ValidationError("شعار الشركة يجب أن يكون صورة PNG أو JPEG أو WebP")
+    if len(text) > LOGO_MAX_CHARS:
+        raise ValidationError("حجم شعار الشركة أكبر من الحد المسموح")
+
 # Settings the UI may write. Anything else is rejected so a typo cannot silently
 # create a dead key that nothing reads.
 EDITABLE_SETTINGS = {
@@ -32,6 +47,7 @@ EDITABLE_SETTINGS = {
     "costing_method",  # fifo | weighted_average
     "app_name",
     "vat_enabled",
+    "logo",  # base64 data URL; the UI downscales before sending
 }
 
 
@@ -65,13 +81,15 @@ class SettingsService:
                     f"طريقة التكلفة يجب أن تكون إحدى: {', '.join(COSTING_METHODS)}"
                 )
         for key, value in values.items():
+            if key == "logo":
+                _check_logo(value)
             self.settings.set(key, str(value))
         self.audit.record(
             action="settings.update",
             entity_type="company",
             entity_id=self.company_id,
             user_id=self.user_id,
-            summary=f"Updated {', '.join(sorted(values))}",
+            summary=f"تعديل الإعدادات: {', '.join(sorted(values))}",
         )
         return self.settings.all()
 
@@ -105,7 +123,7 @@ class SettingsService:
             entity_type="tax_code",
             entity_id=code.id,
             user_id=self.user_id,
-            summary=f"Created tax code {name} @ {rate}%",
+            summary=f"إضافة كود ضريبة {name} بنسبة {rate}%",
         )
         return code
 

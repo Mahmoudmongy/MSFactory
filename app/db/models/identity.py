@@ -1,7 +1,7 @@
 """Identity and tenancy: users, companies, memberships, sessions."""
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..base import Base, TimestampMixin
@@ -82,6 +82,7 @@ class CompanySetting(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id", ondelete="CASCADE"), index=True)
     key: Mapped[str] = mapped_column(String(80))
-    value: Mapped[str] = mapped_column(String(500), default="")
+    # Text, not String(500): a company logo is stored here as a data URL.
+    value: Mapped[str] = mapped_column(Text, default="")
 
     company = relationship("Company", back_populates="settings")

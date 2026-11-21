@@ -29,23 +29,46 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = "postgresql+psycopg://msfactory:msfactory_dev_pw@127.0.0.1:5432/msfactory"
-    db_pool_size: int = 10
-    db_max_overflow: int = 20
+    # Kept well under the Supabase session-pooler limit (15 clients) so the
+    # bootstrap fan-out plus concurrent users cannot exhaust the pooler.
+    db_pool_size: int = 6
+    db_max_overflow: int = 4
+    # Supabase closes idle pooler sessions; recycle before it does.
+    db_pool_recycle: int = 240
     db_echo: bool = False
 
     # Redis (rate limiting, caching, background jobs)
     redis_url: str = "redis://127.0.0.1:6379/0"
 
     # CORS
+    # Comma-separated origins. ``*`` allows any, which browsers refuse to
+    # combine with credentials; when the frontend is hosted separately (a
+    # static host pointing here) list its origin explicitly.
     cors_origins: str = "*"
 
     # Rate limiting
     rate_limit_per_minute: int = 120
     login_rate_limit_per_minute: int = 10
+    # Take the client address from CF-Connecting-IP / X-Forwarded-For instead of
+    # the socket peer. Only correct when a trusted proxy sits in front: a client
+    # that reaches the app directly can forge those headers and dodge the limit.
+    trust_proxy_headers: bool = False
 
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def uses_transaction_pooler(self) -> bool:
+        """True when the URL points at a PgBouncer-style transaction pooler.
+
+        Supabase's pooler (port 6543) hands each transaction a different
+        backend, so a server-side prepared statement created in one transaction
+        is missing in the next and the query fails with "prepared statement
+        does not exist". psycopg must be told not to prepare.
+        """
+        url = self.database_url
+        return ":6543/" in url or "pooler.supabase.com" in url
 
     @property
     def is_production(self) -> bool:

@@ -13,6 +13,14 @@ import urllib.parse
 
 import pytest
 
+# Argon2 is deliberately slow so a stolen hash is expensive to crack. In tests
+# it is pure overhead — hundreds of registrations at production cost dominate
+# the run. These must be set before the application (and its Settings object)
+# is imported, hence the module-level assignment rather than a fixture.
+os.environ.setdefault("MSFACTORY_ARGON2_TIME_COST", "1")
+os.environ.setdefault("MSFACTORY_ARGON2_MEMORY_COST", "8192")
+os.environ.setdefault("MSFACTORY_ARGON2_PARALLELISM", "1")
+
 
 def _load_dotenv() -> None:
     """Load ``.env`` into the environment so the derivation below sees it.
@@ -79,6 +87,15 @@ def _refuse_to_run_on_live_data():
 
 @pytest.fixture(scope="session", autouse=True)
 def _schema():
+    """Rebuild the schema from the models at the start of every session.
+
+    Dropping first matters: ``create_all`` only creates missing *tables*, so a
+    column added to an existing table would otherwise be silently absent and
+    the tests would fail on a database that no longer matches the models. This
+    is safe precisely because the guard above proves we are on a *_test
+    database.
+    """
+    Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     yield
 
@@ -106,9 +123,11 @@ def _clean_business_tables():
             text(
                 "TRUNCATE stock_consumptions, stock_layers, stock_movements, item_variants, "
                 "items, item_groups, warehouses, units_of_measure, "
+                "work_order_materials, work_orders, "
                 "journal_lines, journal_entries, payment_allocations, payments, "
                 "invoice_lines, invoices, contacts, tax_codes, company_settings, sequences, "
                 "fiscal_periods, audit_logs, idempotency_keys, refresh_tokens, memberships, "
+                "import_mappings, import_jobs, "
                 "accounts, companies, users RESTART IDENTITY CASCADE"
             )
         )

@@ -21,6 +21,16 @@ from ..repositories.documents import JournalRepository
 
 ZERO = Decimal("0.00")
 
+# Journal source types are stored in English; the audit trail shows Arabic.
+SOURCE_TYPE_AR = {
+    "manual": "يدوي",
+    "invoice": "فاتورة",
+    "payment": "سند",
+    "production": "إنتاج",
+    "opening": "افتتاحي",
+    "return": "مرتجع",
+}
+
 
 class AccountingService:
     def __init__(self, db: Session, company_id: int, user_id: int | None = None):
@@ -81,7 +91,7 @@ class AccountingService:
             entity_type="journal_entry",
             entity_id=entry.id,
             user_id=self.user_id,
-            summary=f"{source_type} entry {reference or entry.id}",
+            summary=f"قيد {SOURCE_TYPE_AR.get(source_type, source_type)} رقم {reference or entry.id}",
         )
         return entry
 
@@ -122,7 +132,7 @@ class AccountingService:
             entity_type="journal_entry",
             entity_id=original.id,
             user_id=self.user_id,
-            summary=f"Reversed by entry {reversal.id}: {reason}",
+            summary=f"عُكس بالقيد {reversal.id}: {reason}",
         )
         self.db.flush()
         return reversal

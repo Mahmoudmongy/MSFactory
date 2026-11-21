@@ -15,6 +15,7 @@ class Role(StrEnum):
     ADMIN = "admin"
     ACCOUNTANT = "accountant"
     SALES = "sales"
+    STOREKEEPER = "storekeeper"  # أمين مخزن
     VIEWER = "viewer"
     CUSTOMER = "customer"  # portal-only, sees just their own documents
 
@@ -25,6 +26,13 @@ class Permission(StrEnum):
     ACCOUNT_MANAGE = "account:manage"
     CONTACT_VIEW = "contact:view"
     CONTACT_MANAGE = "contact:manage"
+    ITEM_VIEW = "item:view"
+    ITEM_MANAGE = "item:manage"
+    WAREHOUSE_MANAGE = "warehouse:manage"
+    STOCK_VIEW = "stock:view"
+    STOCK_MANAGE = "stock:manage"
+    PRODUCTION_VIEW = "production:view"
+    PRODUCTION_MANAGE = "production:manage"
     INVOICE_VIEW = "invoice:view"
     INVOICE_MANAGE = "invoice:manage"
     PAYMENT_VIEW = "payment:view"
@@ -45,6 +53,13 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
         Permission.ACCOUNT_MANAGE,
         Permission.CONTACT_VIEW,
         Permission.CONTACT_MANAGE,
+        Permission.ITEM_VIEW,
+        Permission.ITEM_MANAGE,
+        Permission.WAREHOUSE_MANAGE,
+        Permission.STOCK_VIEW,
+        Permission.STOCK_MANAGE,
+        Permission.PRODUCTION_VIEW,
+        Permission.PRODUCTION_MANAGE,
         Permission.INVOICE_VIEW,
         Permission.INVOICE_MANAGE,
         Permission.PAYMENT_VIEW,
@@ -57,13 +72,29 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
     Role.SALES: {
         Permission.CONTACT_VIEW,
         Permission.CONTACT_MANAGE,
+        Permission.ITEM_VIEW,
+        Permission.STOCK_VIEW,
         Permission.INVOICE_VIEW,
         Permission.INVOICE_MANAGE,
         Permission.PAYMENT_VIEW,
         Permission.REPORT_VIEW,
     },
+    Role.STOREKEEPER: {
+        Permission.ITEM_VIEW,
+        Permission.ITEM_MANAGE,
+        Permission.WAREHOUSE_MANAGE,
+        Permission.STOCK_VIEW,
+        Permission.STOCK_MANAGE,
+        Permission.PRODUCTION_VIEW,
+        Permission.PRODUCTION_MANAGE,
+        Permission.CONTACT_VIEW,
+        Permission.REPORT_VIEW,
+    },
     Role.VIEWER: {
         Permission.CONTACT_VIEW,
+        Permission.ITEM_VIEW,
+        Permission.STOCK_VIEW,
+        Permission.PRODUCTION_VIEW,
         Permission.INVOICE_VIEW,
         Permission.PAYMENT_VIEW,
         Permission.REPORT_VIEW,

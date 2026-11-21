@@ -37,7 +37,35 @@
   --shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.14);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --nav-height: 64px;
-  --font: "Segoe UI", Tahoma, "Noto Naskh Arabic", "Noto Sans Arabic", system-ui, sans-serif;
+  /* Sidebar palette. --sidebar-bg is the dark rail seen on the old app; the
+     accent stays tied to --brand-700 so a theme change moves both together. */
+  --sidebar-bg: #1f2d3a;
+  --sidebar-fg: #cfd8e0;
+  /* Times New Roman first, as requested. Phones rarely ship it and it has no
+     Arabic glyphs on most of them, so the Arabic serif faces after it keep the
+     Arabic text looking consistent instead of dropping to the browser default. */
+  --font: "Times New Roman", "Tinos", "Liberation Serif", "Noto Naskh Arabic", "Traditional Arabic", serif;
+}
+
+/* Dark mode: only the surfaces and ink tokens flip; the accent and the dark
+   sidebar already read well on both, so they are left alone. */
+:root[data-theme="dark"] {
+  --ink-900: #e6edf3;
+  --ink-700: #cbd5e1;
+  --ink-500: #94a3b8;
+  --ink-400: #64748b;
+  --ink-200: #334155;
+  --ink-100: #1e293b;
+  --ink-50: #16202c;
+  --surface: #1b2733;
+  --ok-bg: #0f2e22;
+  --ok-fg: #4ade80;
+  --warn-bg: #33270f;
+  --warn-fg: #fbbf24;
+  --danger-bg: #3a1a1a;
+  --danger-fg: #f87171;
+  --info-bg: #12233f;
+  --info-fg: #60a5fa;
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -68,17 +96,90 @@ button { cursor: pointer; }
   text-align: left;
 }
 
-/* ---------- Layout ---------- */
+/* ---------- Layout ----------
+   Two shells share one markup: a dark sidebar beside the content on wide
+   screens, and the same sidebar as a slide-in drawer on phones. The bottom
+   tabbar is kept for phones because it is the fastest one-thumb control. */
 .app-shell {
   min-height: 100dvh;
   display: flex;
-  flex-direction: column;
-  max-width: 720px;
-  margin: 0 auto;
+  align-items: stretch;
   background: var(--ink-50);
 }
 
-.screen { flex: 1; padding: 16px; padding-bottom: calc(var(--nav-height) + var(--safe-bottom) + 24px); }
+/* Sidebar */
+.sidebar {
+  width: 240px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--sidebar-bg);
+  color: var(--sidebar-fg);
+  position: sticky;
+  top: 0;
+  height: 100dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.sidebar__brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #fff;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.sidebar__mark {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border-radius: 10px;
+  background: var(--brand-700);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+.sidebar__nav { display: flex; flex-direction: column; padding: 8px 0 24px; }
+.sidebar__link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 10px 16px;
+  color: var(--sidebar-fg);
+  font-size: 0.9rem;
+  border-inline-start: 3px solid transparent;
+  text-decoration: none;
+}
+.sidebar__link:hover { background: rgba(255, 255, 255, 0.06); color: #fff; }
+.sidebar__link[aria-current="page"] {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  border-inline-start-color: var(--brand-500);
+}
+.sidebar__icon { width: 22px; text-align: center; flex: none; opacity: 0.9; }
+.sidebar__footer { margin-top: auto; padding: 12px 16px calc(12px + var(--safe-bottom)); border-top: 1px solid rgba(255, 255, 255, 0.08); }
+.sidebar__user { font-size: 0.78rem; opacity: 0.8; margin-bottom: 10px; }
+.sidebar__logout {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+}
+
+/* Content column */
+.content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+.screen { flex: 1; padding: 16px; width: 100%; max-width: 1150px; margin: 0 auto; padding-bottom: calc(var(--nav-height) + var(--safe-bottom) + 24px); }
 .screen--plain { padding-bottom: 24px; }
 
 .appbar {
@@ -87,15 +188,14 @@ button { cursor: pointer; }
   z-index: 20;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
+  gap: 10px;
+  padding: 10px 14px;
   background: var(--brand-700);
   color: #fff;
   box-shadow: var(--shadow);
-  padding-top: calc(12px + env(safe-area-inset-top, 0px));
+  padding-top: calc(10px + env(safe-area-inset-top, 0px));
 }
-
-.appbar__title { font-size: 1.05rem; font-weight: 700; margin: 0; flex: 1; }
+.appbar__title { font-size: 1.05rem; font-weight: 700; margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .appbar__sub { font-size: 0.72rem; opacity: 0.85; display: block; font-weight: 400; }
 
 .icon-btn {
@@ -112,7 +212,16 @@ button { cursor: pointer; }
 }
 .icon-btn:active { transform: scale(0.94); }
 
-/* ---------- Bottom navigation (thumb reach) ---------- */
+/* Drawer overlay: only ever visible on phones. */
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.5);
+  z-index: 25;
+}
+
+/* ---------- Bottom navigation (thumb reach, phones only) ---------- */
 .tabbar {
   position: fixed;
   bottom: 0;
@@ -122,7 +231,6 @@ button { cursor: pointer; }
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: 1fr;
-  max-width: 720px;
   margin: 0 auto;
   height: calc(var(--nav-height) + var(--safe-bottom));
   padding-bottom: var(--safe-bottom);
@@ -225,6 +333,9 @@ button { cursor: pointer; }
 .badge--draft { background: var(--ink-100); color: var(--ink-700); }
 .badge--void { background: var(--danger-bg); color: var(--danger-fg); }
 .badge--overdue { background: var(--danger-bg); color: var(--danger-fg); }
+.badge--in_progress { background: var(--info-bg); color: var(--info-fg); }
+.badge--completed { background: var(--ok-bg); color: var(--ok-fg); }
+.badge--cancelled { background: var(--ink-100); color: var(--ink-700); }
 
 /* ---------- Forms ---------- */
 .field { margin-bottom: 14px; }
@@ -250,6 +361,17 @@ button { cursor: pointer; }
 .input.num { text-align: left; }
 .textarea { min-height: 88px; resize: vertical; }
 
+/* Hints live in the empty box, never as a value: a real value would be saved
+   if the user forgot to change it. --ink-500 is the muted token that still
+   clears 4.5:1 in both themes (4.76 light, 5.92 dark). */
+.input::placeholder, .textarea::placeholder {
+  color: var(--ink-500);
+  opacity: 1; /* Firefox dims placeholders by default */
+}
+/* Number fields cannot show a placeholder in some browsers while a spinner is
+   present, and a "0" hint is meaningless anyway — keep the hint on the label. */
+.input.num::placeholder { text-align: left; }
+
 /* ---------- Buttons ---------- */
 .btn {
   display: inline-flex;
@@ -272,6 +394,22 @@ button { cursor: pointer; }
 .btn--ghost { background: var(--ink-100); color: var(--ink-900); }
 .btn--danger { background: var(--danger-fg); }
 .btn--sm { min-height: 40px; padding: 8px 14px; font-size: 0.85rem; }
+
+/* Chip pickers for the custom (pivot) report. Big touch targets, because the
+ * whole app is used one-thumbed on a phone. */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  min-height: 40px;
+  padding: 8px 14px;
+  border: 1px solid var(--ink-200);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-700);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.chip--on { background: var(--brand-600); border-color: var(--brand-600); color: #fff; }
 
 /* Sticky action bar so the primary action is always reachable by thumb. */
 .action-bar {
@@ -429,9 +567,142 @@ td.num, th.num { text-align: left; }
 
 .row-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
 
-/* ---------- Desktop: roomier, but never a different app ---------- */
-@media (min-width: 721px) {
-  .kpi-grid { grid-template-columns: repeat(4, 1fr); }
-  .screen { padding: 24px; padding-bottom: 96px; }
-  .tabbar { border-radius: 0; }
+/* ---------- Theme picker popover ---------- */
+.theme-popover {
+  position: fixed;
+  z-index: 60;
+  top: calc(58px + env(safe-area-inset-top, 0px));
+  inset-inline-start: 12px;
+  width: min(340px, calc(100vw - 24px));
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--ink-200);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
 }
+.theme-popover__head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.theme-popover__head .icon-btn { background: var(--ink-100); color: var(--ink-900); min-width: 36px; min-height: 36px; }
+.theme-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.theme-choice {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--ink-200);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink-900);
+  font: inherit;
+  font-size: 0.85rem;
+}
+.theme-choice[aria-pressed="true"] { outline: 2px solid var(--brand-600); outline-offset: 1px; }
+.theme-swatch { width: 18px; height: 18px; flex: none; border-radius: 50%; background: var(--swatch); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15); }
+.theme-custom { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--ink-200); font-size: 0.85rem; }
+.theme-custom input { width: 48px; height: 38px; padding: 3px; margin: 0; }
+
+/* ---------- Responsive shell ----------
+   Below 861px the sidebar becomes a slide-in drawer with an overlay and the
+   bottom tabbar stays; from 861px up the sidebar is always visible and the
+   tabbar is hidden. The breakpoint matches the old app so both feel the same. */
+@media (max-width: 860px) {
+  .sidebar {
+    position: fixed;
+    inset-block: 0;
+    inset-inline-start: 0;
+    width: 280px;
+    max-width: 85vw;
+    z-index: 30;
+    transform: translateX(105%);
+    transition: transform 0.24s ease;
+    visibility: hidden;
+  }
+  [dir="rtl"] .sidebar { transform: translateX(105%); }
+  .sidebar.is-open { transform: translateX(0); visibility: visible; }
+  .sidebar-overlay.is-open { display: block; }
+  .sidebar__brand { position: sticky; top: 0; background: var(--sidebar-bg); z-index: 2; }
+}
+
+@media (min-width: 861px) {
+  .sidebar { display: flex; flex-direction: column; }
+  .sidebar-overlay { display: none !important; }
+  .tabbar { display: none; }
+  /* The sidebar is always visible, so the drawer button is redundant. */
+  .appbar__menu { display: none; }
+  .kpi-grid { grid-template-columns: repeat(4, 1fr); }
+  .screen { padding: 20px; padding-bottom: 32px; }
+  /* No bottom tabbar on desktop, so the action bar can sit lower. */
+  .action-bar { bottom: 12px; }
+}
+
+/* ---------- Filter card (search + period, above a list) ---------- */
+.filter-card { display: grid; gap: 12px; margin-bottom: 14px; }
+.filter-card__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+.filter-card__grid .field { margin-bottom: 0; }
+.filter-card__actions { display: flex; gap: 8px; justify-content: flex-end; }
+.filter-card__actions .btn { min-height: 42px; }
+
+/* ---------- Report hub (grouped report cards) ---------- */
+.report-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.report-group { background: var(--surface); border: 1px solid var(--ink-100); border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow); }
+.report-group__head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.report-group__head h3 { margin: 0; font-size: 1rem; font-weight: 800; }
+.report-group__head span { font-size: 0.72rem; color: var(--ink-500); }
+.report-group__list { display: grid; gap: 4px; }
+.report-group__list button {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 40px;
+  padding: 8px 10px; background: transparent; border: 0; border-radius: var(--radius-sm);
+  text-align: start; font-size: 0.88rem; color: var(--ink-700);
+}
+.report-group__list button:hover { background: var(--brand-50); color: var(--brand-700); }
+
+/* ---------- Statement pair (income statement + balance sheet) ---------- */
+.statement-period { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-bottom: 14px; }
+.statement-period .field { margin-bottom: 0; min-width: 160px; }
+.statement-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+.statement-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--ink-100); }
+.statement-heading h3 { margin: 0; font-size: 1rem; font-weight: 800; }
+.statement-section-title { padding: 10px 16px 4px; font-size: 0.78rem; font-weight: 800; color: var(--ink-500); }
+.statement-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.statement-table td { padding: 8px 16px; border-bottom: 1px solid var(--ink-50); }
+.statement-table td:last-child { text-align: left; direction: ltr; font-variant-numeric: tabular-nums; }
+.statement-table tr.statement-subtotal td { font-weight: 700; border-top: 1px solid var(--ink-200); }
+.statement-table tr.statement-final td { font-weight: 800; background: var(--brand-50); }
+.nowrap { white-space: nowrap; }
+
+/* ---------- Tree (chart of accounts, cash & bank) ---------- */
+.tree-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; margin-inline-end: 6px; padding: 0;
+  background: transparent; border: 0; border-radius: 6px;
+  color: var(--ink-500); font-size: 0.9rem; cursor: pointer; vertical-align: middle;
+}
+.tree-toggle:hover { background: var(--brand-50); color: var(--brand-700); }
+.tree-toggle--empty { visibility: hidden; }
+.list__item--head { background: var(--ink-50); font-weight: 800; }
+.list__item--head .list__title { font-weight: 800; }
+.list__empty { padding: 14px 16px; color: var(--ink-500); font-size: 0.85rem; text-align: center; }
+
+/* ---------- Assistant ---------- */
+.assistant__quick { display: flex; flex-wrap: wrap; gap: 8px; }
+.assistant__row {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+  padding: 10px 0; border-block-end: 1px solid var(--ink-100);
+}
+.assistant__row:last-child { border-block-end: 0; }
+.assistant__row strong { color: var(--brand-700); }
+
+/* ---------- Stock warnings ---------- */
+/* A negative balance is an error state, not a number to read past. */
+.banner {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 12px 14px; margin-block-end: 12px;
+  border-radius: var(--radius); font-size: 0.875rem;
+}
+.banner--danger { background: var(--danger-bg); color: var(--danger-fg); }
+.banner strong { font-weight: 600; }
+
+tr.row--negative td { background: var(--danger-bg); color: var(--danger-fg); font-weight: 600; }
+
+/* `hidden` must win over the flex/grid display rules the form fields carry. */
+[hidden] { display: none !important; }

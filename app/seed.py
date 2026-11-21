@@ -5,11 +5,13 @@ Idempotent: does nothing if the demo user already exists.
 """
 from __future__ import annotations
 
+import contextlib
 from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import select
 
+from .core.errors import ConflictError
 from .db.models import Company, Contact, User
 from .db.session import SessionLocal
 from .repositories.core import AccountRepository
@@ -17,9 +19,19 @@ from .services.auth import AuthService
 from .services.invoices import InvoiceService
 from .services.onboarding import provision_company
 from .services.payments import PaymentService
+from .services.team import TeamService
 
 DEMO_EMAIL = "admin@msfactory.eg"
 DEMO_PASSWORD = "Admin123!@#"
+
+# One company, several logins, so a small team can work in parallel while the
+# multi-company foundation stays untouched.
+DEMO_TEAM = [
+    ("owner@msfactory.eg", "مالك الشركة", "owner"),
+    ("accountant@msfactory.eg", "المحاسب", "accountant"),
+    ("sales@msfactory.eg", "مسؤول المبيعات", "sales"),
+    ("viewer@msfactory.eg", "مطّلع", "viewer"),
+]
 
 
 def seed() -> None:
@@ -39,6 +51,11 @@ def seed() -> None:
             base_currency="EGP",
         )
         provision_company(db, company=company, owner_id=user.id, role="owner")
+
+        team = TeamService(db, company.id, user.id)
+        for email, full_name, role in DEMO_TEAM:
+            with contextlib.suppress(ConflictError):
+                team.add_member(email=email, role=role, full_name=full_name, password=DEMO_PASSWORD)
 
         contacts = [
             ("مؤسسة الأمل التجارية", "customer", "01001234567"),

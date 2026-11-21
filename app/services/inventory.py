@@ -17,13 +17,15 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..core.errors import NotFoundError, ValidationError
 from ..db.base import utcnow
 from ..db.models import (
+    DAMAGED_CODE,
     INBOUND_KINDS,
+    INVENTORY_CODE,
     Item,
     ItemVariant,
     StockConsumption,
@@ -45,14 +47,21 @@ from .accounting import AccountingService
 ZERO = Decimal("0.00")
 FOUR = Decimal("0.0001")
 
-# Accounts used to keep inventory and the books in step.
-INVENTORY_CODE = "1200"
-DAMAGED_CODE = "1210"
+# Accounts used to keep inventory and the books in step. INVENTORY_CODE,
+# DAMAGED_CODE and WIP_CODE come from the model layer so both agree.
 SHRINKAGE_CODE = "5600"
-WIP_CODE = "1220"
+CAPITAL_CODE = "3100"
 
 # Costing methods a company can choose between in settings.
 COSTING_METHODS = ("fifo", "weighted_average")
+
+# Layers whose goods came off a work order are "manufactured"; every other
+# source is "purchased". Reports split margin on this one distinction.
+MANUFACTURED_SOURCE = "production_receipt"
+
+# Warehouse the server creates for write-offs. Never a default home for goods:
+# its code sorts first, so "first leaf warehouse" would pick it every time.
+DAMAGE_WAREHOUSE_CODE = "DMG"
 
 
 class InventoryService:
@@ -115,7 +124,7 @@ class InventoryService:
             entity_type="item",
             entity_id=item.id,
             user_id=self.user_id,
-            summary=f"Item {item.code} — {item.name}",
+            summary=f"صنف {item.code} — {item.name}",
         )
         self.db.flush()
         return item
@@ -150,7 +159,7 @@ class InventoryService:
             entity_type="item",
             entity_id=item.id,
             user_id=self.user_id,
-            summary=f"Added variant {variant.label or variant.code} to {item.code}",
+            summary=f"إضافة مقاس {variant.label or variant.code} للصنف {item.code}",
         )
         return variant
 
@@ -189,8 +198,10 @@ class InventoryService:
             company_id=self.company_id,
             code=code,
             name=name,
+            name_ar=fields.get("name_ar", "") or "",
             parent_id=parent_id,
             is_group=fields.get("is_group", False),
+            kind=fields.get("kind", "") or "",
             address=fields.get("address", ""),
             notes=fields.get("notes", ""),
         )
@@ -201,7 +212,31 @@ class InventoryService:
             entity_type="warehouse",
             entity_id=warehouse.id,
             user_id=self.user_id,
-            summary=f"Warehouse {warehouse.code} — {warehouse.name}",
+            summary=f"مخزن {warehouse.code} — {warehouse.name}",
+        )
+        return warehouse
+
+    def update_warehouse(self, warehouse_id: int, **fields) -> Warehouse:
+        warehouse = self.warehouses.get(warehouse_id)
+        if "name" in fields and fields["name"] is not None:
+            name = fields["name"].strip()
+            if not name:
+                raise ValidationError("اسم المخزن مطلوب")
+            warehouse.name = name
+        for key in ("name_ar", "kind", "address", "notes"):
+            if fields.get(key) is not None:
+                setattr(warehouse, key, fields[key])
+        if fields.get("is_active") is not None:
+            warehouse.is_active = bool(fields["is_active"])
+        if "parent_id" in fields:
+            warehouse.parent_id = fields["parent_id"]
+        self.db.flush()
+        self.audit.record(
+            action="warehouse.update",
+            entity_type="warehouse",
+            entity_id=warehouse.id,
+            user_id=self.user_id,
+            summary=f"تعديل مخزن {warehouse.code} — {warehouse.name}",
         )
         return warehouse
 
@@ -330,10 +365,18 @@ class InventoryService:
         if not item.track_inventory:
             raise ValidationError(f"الصنف «{item.name}» غير مخزني (خدمة)")
 
+        # Two separate checks, because they answer different questions: the
+        # company may hold the item while this warehouse is empty, and issuing
+        # from the wrong warehouse silently drives its balance negative.
         on_hand = self.layers.quantity_on_hand(item.id, variant.id)
         if quantity > on_hand:
             raise ValidationError(
                 f"الكمية المطلوبة {quantity} أكبر من الرصيد المتاح {on_hand} للصنف «{item.name}»"
+            )
+        in_warehouse = self.layers.quantity_in_warehouse(item.id, warehouse_id, variant.id)
+        if quantity > in_warehouse:
+            raise ValidationError(
+                f"الكمية المطلوبة {quantity} أكبر من رصيد المخزن {in_warehouse} للصنف «{item.name}»"
             )
 
         consumed, cost_total = self.layers.consume(
@@ -515,7 +558,9 @@ class InventoryService:
         item = self.items.get(item_id)
         variant = self.resolve_variant(item.id, variant_id)
         counted = Decimal(str(counted_quantity or 0)).quantize(FOUR)
-        current = self.layers.quantity_on_hand(item.id, variant.id)
+        # A count is physical: it measures one warehouse, so the delta has to be
+        # against that warehouse's balance, not the company total.
+        current = self.layers.quantity_in_warehouse(item.id, warehouse_id, variant.id)
         delta = counted - current
         if delta == 0:
             return None
@@ -585,8 +630,14 @@ class InventoryService:
         if contra_account_id:
             contra = self.accounts.get(contra_account_id)
         if contra is None:
-            contra = self.accounts.by_code(INVENTORY_CODE)
-        if contra is None:
+            # A standalone inbound move with no stated counterpart is an
+            # opening balance, so it is funded by capital. An outbound one is a
+            # write-off. Falling back to the inventory account itself would post
+            # a debit and a credit to the same account, leaving inventory out of
+            # the books entirely.
+            fallback = CAPITAL_CODE if debit_inventory else SHRINKAGE_CODE
+            contra = self.accounts.by_code(fallback)
+        if contra is None or contra.id == inventory.id:
             return
 
         if debit_inventory:
@@ -620,6 +671,75 @@ class InventoryService:
 
         method = SettingRepository(self.db, self.company_id).get("costing_method", "fifo")
         return method if method in COSTING_METHODS else "fifo"
+
+    def origin_split(self, movement_id: int) -> dict[str, dict[str, Decimal]]:
+        """Split a movement by origin: how much, and at what cost, was made vs bought.
+
+        Goods made by a work order enter stock through a ``production_receipt``
+        layer; anything else was bought. Reading the split from the layers the
+        movement actually consumed keeps it right even when one issue draws on
+        both kinds at once, which is exactly what a mixed sale does.
+
+        Both quantity and cost are returned because they answer different
+        questions: quantity divides revenue (every unit sells at one price),
+        cost measures the margin.
+        """
+        rows = self.db.execute(
+            select(
+                StockLayer.source_type,
+                func.sum(StockConsumption.quantity),
+                func.sum(StockConsumption.total_cost),
+            )
+            .join(StockLayer, StockLayer.id == StockConsumption.layer_id)
+            .where(
+                StockConsumption.company_id == self.company_id,
+                StockConsumption.movement_id == movement_id,
+            )
+            .group_by(StockLayer.source_type)
+        ).all()
+        split = {
+            "manufactured": {"quantity": Decimal("0.0000"), "cost": ZERO},
+            "purchased": {"quantity": Decimal("0.0000"), "cost": ZERO},
+        }
+        for source_type, quantity, total in rows:
+            key = "manufactured" if source_type == MANUFACTURED_SOURCE else "purchased"
+            split[key]["quantity"] += Decimal(str(quantity or 0))
+            split[key]["cost"] += to_money(total)
+        return split
+
+    def resolve_warehouse(
+        self, item: Item, warehouse_id: int | None, *, require_stock: bool = False
+    ) -> int:
+        """Pick the warehouse to move stock in or out of.
+
+        An explicit choice wins; otherwise the item's default; otherwise a leaf
+        warehouse that actually holds the item, and only then the first leaf.
+        ``require_stock`` makes the last fallback an error instead of guessing,
+        which is what a sale needs: posting a sale out of an empty warehouse
+        would drive that balance negative.
+        """
+        if warehouse_id:
+            self._leaf_warehouse(warehouse_id)
+            return warehouse_id
+        if item.default_warehouse_id:
+            return item.default_warehouse_id
+
+        # «هالك المخزن» is created for write-offs and must never be picked as a
+        # default home for goods — its code sorts first, so a naive "first leaf"
+        # would send every unstamped sale there.
+        leaves = [w for w in self.warehouses.list() if not w.is_group]
+        leaves = [w for w in leaves if w.code != DAMAGE_WAREHOUSE_CODE]
+        if not leaves:
+            raise ValidationError("لا يوجد مخزن فرعي يمكن الصرف منه — أنشئ مخزناً أولاً")
+
+        holding = [w for w in leaves if self.layers.quantity_in_warehouse(item.id, w.id) > ZERO]
+        if holding:
+            return holding[0].id
+        if require_stock:
+            raise ValidationError(
+                f"الصنف «{item.name}» غير موجود في أي مخزن — استلمه أولاً أو حدد المخزن"
+            )
+        return leaves[0].id
 
     def stock_on_hand(self, *, warehouse_id: int | None = None, item_id: int | None = None) -> list[dict]:
         return self.layers.on_hand_rows(warehouse_id=warehouse_id, item_id=item_id)

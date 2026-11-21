@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..core.errors import NotFoundError
@@ -107,6 +108,34 @@ class InvoiceRepository:
         if contact_id:
             stmt = stmt.where(Invoice.contact_id == contact_id)
         return list(self.db.scalars(stmt))
+
+    def returns_of(self, invoice_id: int) -> list[Invoice]:
+        return list(
+            self.db.scalars(
+                select(Invoice)
+                .options(selectinload(Invoice.lines))
+                .where(Invoice.company_id == self.company_id, Invoice.return_of_id == invoice_id)
+                .order_by(Invoice.issue_date, Invoice.id)
+            )
+        )
+
+    def returned_totals(self, kind: str) -> dict[int, Decimal]:
+        """How much has been returned against each invoice of one kind.
+
+        Summed per source invoice so a caller can net a return off the invoice
+        it reverses without walking every document.
+        """
+        rows = self.db.execute(
+            select(Invoice.return_of_id, func.coalesce(func.sum(Invoice.total), 0))
+            .where(
+                Invoice.company_id == self.company_id,
+                Invoice.kind == f"{kind}_return",
+                Invoice.status != "void",
+                Invoice.return_of_id.is_not(None),
+            )
+            .group_by(Invoice.return_of_id)
+        ).all()
+        return {row[0]: Decimal(str(row[1])) for row in rows}
 
     def open_for_contact(self, contact_id: int, kind: str) -> list[Invoice]:
         return list(

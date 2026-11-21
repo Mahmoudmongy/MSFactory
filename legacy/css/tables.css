@@ -1,0 +1,1399 @@
+/* MS Factory — one authoritative table system for every screen.
+ *
+ * Loaded last so it wins over the older per-screen table rules without
+ * needing !important on every line. Three behaviours, chosen by available
+ * width rather than by device name:
+ *
+ *   >= 760px  comfortable density, sticky header, hover row highlight
+ *   480-760px tighter density, horizontal scroll
+ *   < 480px   stacked cards — one record per card, header shown as a label
+ *
+ * The stacked mode needs the column names, so it reads them from the real
+ * <thead>. Tables built without a <thead> keep the scroll behaviour.
+ */
+
+:root {
+  --tbl-pad-y: 6px;
+  --tbl-pad-x: 10px;
+  --tbl-row-min: 34px;
+  --tbl-ctl: 28px;
+  --tbl-fs: 13.5px;
+  --tbl-bd: var(--bd, #dfe5ec);
+  --tbl-head: var(--pr2, #eef2f7);
+  --tbl-stripe: color-mix(in srgb, var(--pr, var(--pr)) 3%, transparent);
+  --tbl-hover: color-mix(in srgb, var(--pr, var(--pr)) 8%, transparent);
+}
+
+/* ---------- scroll container ---------- */
+
+.factory-table-scroll,
+.factory-universal-table-scroll {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  border-radius: 10px;
+  scrollbar-width: thin;
+}
+
+.factory-table-scroll::-webkit-scrollbar,
+.factory-universal-table-scroll::-webkit-scrollbar {
+  height: 9px;
+  width: 9px;
+}
+
+.factory-table-scroll::-webkit-scrollbar-thumb,
+.factory-universal-table-scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--tx, var(--tx)) 22%, transparent);
+  border-radius: 99px;
+}
+
+.factory-table-scroll::-webkit-scrollbar-track,
+.factory-universal-table-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---------- table ---------- */
+
+.factory-table-scroll table.l,
+.factory-universal-table-scroll table.l,
+table.l {
+  display: table;
+  width: 100%;
+  max-width: 100%;
+  table-layout: auto;
+  border-collapse: separate;
+  border-spacing: 0;
+  margin: 0;
+  font-size: var(--tbl-fs);
+  background: var(--card, #fff);
+  border: 1px solid var(--tbl-bd);
+  border-radius: 10px;
+  overflow: clip;
+}
+
+.factory-table-scroll table.l th,
+.factory-table-scroll table.l td,
+.factory-universal-table-scroll table.l th,
+.factory-universal-table-scroll table.l td,
+table.l th,
+table.l td {
+  padding: var(--tbl-pad-y) var(--tbl-pad-x);
+  height: auto;
+  text-align: start;
+  vertical-align: middle;
+  line-height: 1.5;
+  border-bottom: 1px solid var(--tbl-bd);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  hyphens: auto;
+  min-width: 0;
+}
+
+.factory-table-scroll table.l th,
+.factory-universal-table-scroll table.l th,
+table.l th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--tbl-head);
+  color: var(--tx, var(--tx));
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.1px;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--tbl-bd);
+  /* A sticky header is only useful while it stays legible. */
+  line-height: 1.35;
+  height: 38px;
+  padding-top: 9px;
+  padding-bottom: 9px;
+}
+
+.factory-table-scroll table.l tbody tr:last-child td,
+.factory-universal-table-scroll table.l tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.factory-table-scroll table.l tbody tr:nth-child(even),
+.factory-universal-table-scroll table.l tbody tr:nth-child(even) {
+  background: var(--tbl-stripe);
+}
+
+.factory-table-scroll table.l tbody tr:hover,
+.factory-universal-table-scroll table.l tbody tr:hover {
+  background: var(--tbl-hover);
+}
+
+/* Numbers and money line up in columns and never wrap mid-figure. */
+.factory-table-scroll table.l td[dir="ltr"],
+.factory-universal-table-scroll table.l td[dir="ltr"],
+.factory-table-scroll table.l .factory-summary-amount,
+.factory-universal-table-scroll table.l .factory-summary-amount {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.factory-table-scroll table.l .factory-long-cell,
+.factory-universal-table-scroll table.l .factory-long-cell {
+  max-width: 34ch;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.factory-table-scroll table.l .factory-very-long-cell,
+.factory-universal-table-scroll table.l .factory-very-long-cell {
+  max-width: 28ch;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* Action cells stay narrow and never wrap their buttons. */
+.factory-table-scroll table.l td:has(> .factory-icon-action),
+.factory-table-scroll table.l td:has(> .factory-row-actions),
+.factory-universal-table-scroll table.l td:has(> .factory-icon-action),
+.factory-universal-table-scroll table.l td:has(> .factory-row-actions) {
+  white-space: nowrap;
+  width: 1%;
+}
+
+.factory-table-scroll table.l .factory-icon-action,
+.factory-universal-table-scroll table.l .factory-icon-action {
+  margin: 0 2px;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  border-radius: 8px;
+}
+
+/* Totals row stays visible while scrolling a long list. */
+.factory-table-scroll table.l tfoot td,
+.factory-universal-table-scroll table.l tfoot td {
+  position: sticky;
+  bottom: 0;
+  background: var(--card, #fff);
+  font-weight: 700;
+  box-shadow: 0 -1px 0 var(--tbl-bd);
+}
+
+/* ---------- tablet: scroll instead of squeeze ---------- */
+
+@media (max-width: 760px) {
+  :root {
+    --tbl-pad-y: 8px;
+    --tbl-pad-x: 9px;
+    --tbl-fs: 12.5px;
+  }
+
+  .factory-table-scroll table.l,
+  .factory-universal-table-scroll table.l {
+    min-width: 640px;
+  }
+
+  .factory-table-scroll table.l th,
+  .factory-universal-table-scroll table.l th {
+    font-size: 12px;
+  }
+}
+
+/* ---------- phone: one record per card ---------- */
+
+@media (max-width: 480px) {
+  .factory-table-scroll:has(> table.l > thead),
+  .factory-universal-table-scroll:has(> table.l > thead) {
+    overflow: visible;
+    border-radius: 0;
+  }
+
+  .factory-table-scroll > table.l:has(> thead),
+  .factory-universal-table-scroll > table.l:has(> thead) {
+    display: block !important;
+    min-width: 0 !important;
+    width: 100%;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    overflow: visible;
+  }
+
+  .factory-table-scroll > table.l:has(> thead) > thead,
+  .factory-universal-table-scroll > table.l:has(> thead) > thead {
+    display: none !important;
+  }
+
+  .factory-table-scroll > table.l:has(> thead) > tbody,
+  .factory-universal-table-scroll > table.l:has(> thead) > tbody {
+    display: grid !important;
+    gap: 9px;
+    width: 100%;
+  }
+
+  .factory-table-scroll > table.l:has(> thead) > tbody > tr,
+  .factory-universal-table-scroll > table.l:has(> thead) > tbody > tr {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    width: 100%;
+    background: var(--card, #fff);
+    border: 1px solid var(--tbl-bd);
+    border-radius: 11px;
+    padding: 4px 2px;
+    box-shadow: 0 1px 2px #00000008;
+  }
+
+  .factory-table-scroll > table.l:has(> thead) > tbody > tr:nth-child(even),
+  .factory-universal-table-scroll > table.l:has(> thead) > tbody > tr:nth-child(even) {
+    background: var(--card, #fff);
+  }
+
+  .factory-table-scroll > table.l:has(> thead) > tbody > tr > td,
+  .factory-universal-table-scroll > table.l:has(> thead) > tbody > tr > td {
+    display: grid !important;
+    grid-template-columns: minmax(0, 38%) minmax(0, 1fr);
+    gap: 8px;
+    align-items: baseline;
+    padding: 6px 11px;
+    border: 0;
+    border-bottom: 1px dashed color-mix(in srgb, var(--tbl-bd) 70%, transparent);
+    white-space: normal;
+    text-align: end;
+    font-size: 12.5px;
+    max-width: none;
+    /* Per-column widths from the wide-table rules would squeeze each card
+       cell down to a sliver, so the card owns its own width. */
+    width: auto !important;
+    min-width: 0 !important;
+    table-layout: auto;
+  }
+
+  .factory-table-scroll > table.l:has(> thead) > tbody > tr > td:last-child,
+  .factory-universal-table-scroll > table.l:has(> thead) > tbody > tr > td:last-child {
+    border-bottom: 0;
+  }
+
+  /* The column name becomes the row label. */
+  .factory-table-scroll > table.l:has(> thead) > tbody > tr > td::before,
+  .factory-universal-table-scroll > table.l:has(> thead) > tbody > tr > td::before {
+    content: attr(data-label);
+    grid-column: 1;
+    text-align: start;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--mu, #64748b);
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  /* A cell holding only buttons should not claim a label line. */
+  .factory-table-scroll > table.l:has(> thead) > tbody > tr > td:has(> .factory-icon-action):not(:has(*:not(.factory-icon-action))),
+  .factory-universal-table-scroll > table.l:has(> thead) > tbody > tr > td:has(> .factory-icon-action):not(:has(*:not(.factory-icon-action))) {
+    grid-template-columns: minmax(0, 1fr);
+    text-align: start;
+  }
+
+  .factory-table-scroll > table.l:has(> thead) > tbody > tr > td:has(> .factory-icon-action):not(:has(*:not(.factory-icon-action)))::before,
+  .factory-universal-table-scroll > table.l:has(> thead) > tbody > tr > td:has(> .factory-icon-action):not(:has(*:not(.factory-icon-action)))::before {
+    display: none;
+  }
+
+  /* An empty placeholder row (e.g. "no transactions") spans the card. */
+  .factory-table-scroll > table.l:has(> thead) > tbody > tr > td[colspan],
+  .factory-universal-table-scroll > table.l:has(> thead) > tbody > tr > td[colspan] {
+    grid-template-columns: minmax(0, 1fr);
+    text-align: center;
+    border-bottom: 0;
+    color: var(--mu, #64748b);
+    padding: 16px 11px;
+  }
+
+  .factory-table-scroll > table.l:has(> thead) > tbody > tr > td[colspan]::before,
+  .factory-universal-table-scroll > table.l:has(> thead) > tbody > tr > td[colspan]::before {
+    display: none;
+  }
+
+  .factory-table-scroll > table.l:has(> thead) > tbody > tr > td > input[type="checkbox"],
+  .factory-universal-table-scroll > table.l:has(> thead) > tbody > tr > td > input[type="checkbox"] {
+    justify-self: end;
+  }
+
+  /* Inline editors inside a stacked card need the full width. */
+  .factory-table-scroll > table.l:has(> thead) > tbody > tr > td > input,
+  .factory-table-scroll > table.l:has(> thead) > tbody > tr > td > select,
+  .factory-table-scroll > table.l:has(> thead) > tbody > tr > td > textarea,
+  .factory-universal-table-scroll > table.l:has(> thead) > tbody > tr > td > input,
+  .factory-universal-table-scroll > table.l:has(> thead) > tbody > tr > td > select,
+  .factory-universal-table-scroll > table.l:has(> thead) > tbody > tr > td > textarea {
+    width: 100%;
+    min-width: 0;
+    margin: 0;
+  }
+
+  /* Tables without a header keep scrolling: a card with no labels is useless. */
+  .factory-table-scroll > table.l:not(:has(> thead)),
+  .factory-universal-table-scroll > table.l:not(:has(> thead)) {
+    display: block;
+    overflow-x: auto;
+    min-width: 0;
+  }
+
+  /* Line-item editors are data-entry grids, not records: keep them tabular. */
+  .factory-table-scroll > table.l[data-table-mode="grid"],
+  .factory-universal-table-scroll > table.l[data-table-mode="grid"] {
+    display: table !important;
+    min-width: 520px;
+  }
+
+  .factory-table-scroll > table.l[data-table-mode="grid"] > thead,
+  .factory-universal-table-scroll > table.l[data-table-mode="grid"] > thead {
+    display: table-header-group;
+  }
+
+  .factory-table-scroll > table.l[data-table-mode="grid"] > tbody,
+  .factory-universal-table-scroll > table.l[data-table-mode="grid"] > tbody {
+    display: table-row-group;
+  }
+
+  .factory-table-scroll > table.l[data-table-mode="grid"] > tbody > tr,
+  .factory-universal-table-scroll > table.l[data-table-mode="grid"] > tbody > tr {
+    display: table-row;
+    border: 0;
+    border-radius: 0;
+    padding: 0;
+    box-shadow: none;
+  }
+
+  .factory-table-scroll > table.l[data-table-mode="grid"] > tbody > tr > td,
+  .factory-universal-table-scroll > table.l[data-table-mode="grid"] > tbody > tr > td {
+    display: table-cell;
+    text-align: start;
+    padding: 7px 8px;
+    border-bottom: 1px solid var(--tbl-bd);
+  }
+
+  .factory-table-scroll > table.l[data-table-mode="grid"] > tbody > tr > td::before,
+  .factory-universal-table-scroll > table.l[data-table-mode="grid"] > tbody > tr > td::before {
+    display: none;
+  }
+
+  /* The compact toolbar above each table must not overflow the screen. */
+  .factory-table-tools {
+    gap: 6px;
+    margin: 4px 0 8px;
+    flex-wrap: wrap;
+  }
+
+  .factory-table-tools input {
+    flex: 1 1 100%;
+    max-width: 100%;
+    min-width: 0;
+    height: 40px;
+    font-size: 14px;
+  }
+
+  .factory-table-tools button {
+    flex: 0 1 auto;
+    min-height: 40px;
+    font-size: 13px;
+    padding-inline: 11px;
+  }
+
+  .factory-table-count,
+  .factory-table-total {
+    font-size: 12px;
+  }
+}
+
+/* Very small phones: give the label a little more room. */
+@media (max-width: 360px) {
+  .factory-table-scroll > table.l:has(> thead) > tbody > tr > td,
+  .factory-universal-table-scroll > table.l:has(> thead) > tbody > tr > td {
+    grid-template-columns: minmax(0, 42%) minmax(0, 1fr);
+    padding: 6px 9px;
+    font-size: 12px;
+  }
+}
+
+/* Landscape phones have height to spare but little width: stay in scroll mode. */
+@media (max-width: 760px) and (orientation: landscape) {
+  .factory-table-scroll > table.l:has(> thead),
+  .factory-universal-table-scroll > table.l:has(> thead) {
+    display: table;
+    min-width: 640px;
+  }
+}
+
+@media print {
+  .factory-table-scroll,
+  .factory-universal-table-scroll {
+    overflow: visible !important;
+  }
+
+  .factory-table-scroll table.l,
+  .factory-universal-table-scroll table.l {
+    display: table !important;
+    min-width: 0 !important;
+    width: 100% !important;
+    font-size: 10.5px;
+  }
+
+  .factory-table-scroll table.l thead,
+  .factory-universal-table-scroll table.l thead {
+    display: table-header-group !important;
+  }
+
+  .factory-table-scroll table.l tbody,
+  .factory-universal-table-scroll table.l tbody {
+    display: table-row-group !important;
+  }
+
+  .factory-table-scroll table.l tr,
+  .factory-universal-table-scroll table.l tr {
+    display: table-row !important;
+    break-inside: avoid;
+  }
+
+  .factory-table-scroll table.l td,
+  .factory-universal-table-scroll table.l td {
+    display: table-cell !important;
+    text-align: start !important;
+  }
+
+  .factory-table-scroll table.l td::before,
+  .factory-universal-table-scroll table.l td::before {
+    content: none !important;
+  }
+}
+
+/* ---------- voucher amount split ---------- */
+
+.factory-voucher-split {
+  width: 100%;
+  margin: 6px 0 2px;
+  border-collapse: collapse;
+  table-layout: auto;
+}
+
+.factory-voucher-split th,
+.factory-voucher-split td {
+  padding: var(--tbl-pad-y, 8px) var(--tbl-pad-x, 10px);
+  font-size: var(--tbl-fs, 13px);
+  text-align: start;
+  border-bottom: 1px solid var(--tbl-bd, #e3e8ef);
+  white-space: normal;
+}
+
+.factory-voucher-split th {
+  font-weight: 700;
+  color: var(--tx);
+  background: var(--pr2, var(--bg));
+}
+
+.factory-voucher-split td:last-child,
+.factory-voucher-split th:last-child {
+  width: 1%;
+  text-align: center;
+}
+
+.factory-voucher-split td:nth-child(2),
+.factory-voucher-split th:nth-child(2) {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.factory-voucher-split tfoot th {
+  font-weight: 700;
+  background: color-mix(in srgb, var(--pr2, var(--bg)) 70%, var(--card, #fff));
+}
+
+.factory-voucher-split button.d {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  line-height: 1;
+}
+
+.factory-voucher-balance {
+  margin: 6px 0 10px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.factory-voucher-balance.ok {
+  color: #146c43;
+  background: #e7f6ec;
+  border: 1px solid #b7e2c6;
+}
+
+.factory-voucher-balance.warn {
+  color: #8a4b00;
+  background: #fff4e5;
+  border: 1px solid #f0d3a8;
+}
+
+:root[data-theme="dark"] .factory-voucher-balance.ok {
+  color: #b9f0cd;
+  background: #173d2a;
+  border-color: #2b6b47;
+}
+
+:root[data-theme="dark"] .factory-voucher-balance.warn {
+  color: #ffd9a8;
+  background: #453015;
+  border-color: #6f4f22;
+}
+
+@media (max-width: 480px) {
+  .factory-voucher-split th,
+  .factory-voucher-split td {
+    padding: 7px 8px;
+    font-size: 12px;
+  }
+}
+
+/* ---------- table owns its own scroll ---------- */
+
+/* The filter/search card, the row count and the table live in one screen, but
+   only the rows scroll. Pinning the toolbar keeps it still while the user
+   scrolls a long list, so the search box never drifts away. */
+.factory-reference-filter-row {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--bg, #fff);
+  padding-block: 2px;
+}
+
+.factory-reference-filter-row > .filter-card {
+  background: var(--card, #fff);
+}
+
+.factory-reference-table-card {
+  overflow: visible;
+}
+
+@media (max-width: 860px) {
+  .factory-reference-filter-row {
+    /* Small screens scroll the whole page; pinning would eat the viewport. */
+    position: static;
+  }
+}
+
+/* ---------- buttons ---------- */
+
+/* One place for button shape, so toolbar, row actions and dialogs agree. */
+:root {
+  --btn-radius: 8px;
+  --btn-fs: 12.5px;
+  --btn-h: 34px;
+  --btn-pad-x: 11px;
+  --btn-gap: 6px;
+}
+
+main button,
+main a.g,
+main a.new,
+main .filter-actions button,
+main .filter-controls button {
+  box-sizing: border-box;
+  min-height: var(--btn-h);
+  padding: 5px var(--btn-pad-x);
+  border-radius: var(--btn-radius);
+  font-size: var(--btn-fs);
+  font-weight: 600;
+  line-height: 1.35;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color .16s ease, border-color .16s ease, color .16s ease, box-shadow .16s ease;
+}
+
+main button:focus-visible,
+main a.g:focus-visible,
+main a.new:focus-visible {
+  outline: 2px solid var(--pr, var(--pr));
+  outline-offset: 2px;
+}
+
+main button:active,
+main a.g:active,
+main a.new:active {
+  transform: translateY(1px);
+}
+
+main button:disabled,
+main a.g[aria-disabled="true"] {
+  opacity: .55;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Secondary buttons read as outlines, not as filled blobs. */
+main button.g,
+main a.g {
+  border: 1px solid color-mix(in srgb, var(--pr, var(--pr)) 22%, transparent);
+}
+
+main button.g:hover,
+main a.g:hover {
+  background: color-mix(in srgb, var(--pr, var(--pr)) 12%, var(--card, #fff));
+}
+
+/* Destructive action: clearly red, but not shouting until hovered. */
+main button.d {
+  color: var(--rd, var(--err));
+  border: 1px solid color-mix(in srgb, var(--rd, var(--err)) 24%, transparent);
+  background: transparent;
+}
+
+main button.d:hover {
+  background: color-mix(in srgb, var(--rd, var(--err)) 12%, var(--card, #fff));
+}
+
+/* Compact icon-only buttons in table rows keep a real tap target. */
+main table.l td button,
+main table.l td .factory-row-action {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--btn-radius);
+}
+
+main table.l td .factory-row-actions {
+  gap: var(--btn-gap);
+}
+
+@media (max-width: 860px) {
+  :root {
+    /* 44px is the smallest reliable touch target; anything less misses taps. */
+    --btn-h: 44px;
+    --btn-fs: 13.5px;
+    --btn-pad-x: 14px;
+  }
+
+  main table.l td button,
+  main table.l td .factory-row-action {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+/* ---------- cell alignment follows the reading direction ---------- */
+
+/* Numeric/date columns are forced to direction:ltr so digits read correctly,
+   but that also makes `text-align:start` resolve to the LEFT edge. Alignment
+   must follow the page direction instead, so use physical edges here. */
+:root[dir="rtl"] {
+  --tbl-align: right;
+  --tbl-align-edge: left;
+}
+:root[dir="ltr"] {
+  --tbl-align: left;
+  --tbl-align-edge: right;
+}
+
+.factory-table-scroll table.l th,
+.factory-table-scroll table.l td,
+.factory-universal-table-scroll table.l th,
+.factory-universal-table-scroll table.l td,
+table.l th,
+table.l td {
+  text-align: var(--tbl-align, right);
+}
+
+.factory-table-scroll table.l th.factory-col-date,
+.factory-table-scroll table.l td.factory-col-date,
+.factory-table-scroll table.l th.factory-col-time,
+.factory-table-scroll table.l td.factory-col-time,
+.factory-table-scroll table.l th.factory-col-number,
+.factory-table-scroll table.l td.factory-col-number,
+.factory-table-scroll table.l th.factory-col-code,
+.factory-table-scroll table.l td.factory-col-code,
+.factory-table-scroll table.l th.factory-col-phone,
+.factory-table-scroll table.l td.factory-col-phone,
+.factory-universal-table-scroll table.l th.factory-col-date,
+.factory-universal-table-scroll table.l td.factory-col-date,
+.factory-universal-table-scroll table.l th.factory-col-time,
+.factory-universal-table-scroll table.l td.factory-col-time,
+.factory-universal-table-scroll table.l th.factory-col-number,
+.factory-universal-table-scroll table.l td.factory-col-number,
+.factory-universal-table-scroll table.l th.factory-col-code,
+.factory-universal-table-scroll table.l td.factory-col-code,
+.factory-universal-table-scroll table.l th.factory-col-phone,
+.factory-universal-table-scroll table.l td.factory-col-phone {
+  text-align: var(--tbl-align, right);
+}
+
+/* Buttons in the actions column stay centred regardless of direction. */
+.factory-table-scroll table.l th.factory-col-actions,
+.factory-table-scroll table.l td.factory-col-actions,
+.factory-table-scroll table.l th.factory-action-column,
+.factory-table-scroll table.l td.factory-action-column,
+.factory-universal-table-scroll table.l th.factory-col-actions,
+.factory-universal-table-scroll table.l td.factory-col-actions,
+.factory-universal-table-scroll table.l th.factory-action-column,
+.factory-universal-table-scroll table.l td.factory-action-column {
+  text-align: center;
+}
+
+/* Right-aligned numeric columns keep tabular figures and no odd spacing. */
+.factory-table-scroll table.l td.factory-col-number,
+.factory-table-scroll table.l td.factory-col-date,
+.factory-table-scroll table.l td.factory-col-time,
+.factory-table-scroll table.l td.factory-col-code,
+.factory-universal-table-scroll table.l td.factory-col-number,
+.factory-universal-table-scroll table.l td.factory-col-date,
+.factory-universal-table-scroll table.l td.factory-col-time,
+.factory-universal-table-scroll table.l td.factory-col-code {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- narrow columns, wrapped text ---------- */
+
+/* Columns are sized to their content and kept tight; any text that does not
+   fit wraps instead of widening the table or being clipped. */
+.factory-table-scroll table.l th,
+.factory-table-scroll table.l td,
+.factory-universal-table-scroll table.l th,
+.factory-universal-table-scroll table.l td {
+  padding-inline: 7px;
+  padding-block: 7px;
+}
+
+.factory-table-scroll table.l th.factory-col-name,
+.factory-table-scroll table.l td.factory-col-name,
+.factory-table-scroll table.l th.factory-col-meta,
+.factory-table-scroll table.l td.factory-col-meta,
+.factory-table-scroll table.l th.factory-col-text,
+.factory-table-scroll table.l td.factory-col-text,
+.factory-table-scroll table.l th.factory-col-subwarehouse,
+.factory-table-scroll table.l td.factory-col-subwarehouse,
+.factory-universal-table-scroll table.l th.factory-col-name,
+.factory-universal-table-scroll table.l td.factory-col-name,
+.factory-universal-table-scroll table.l th.factory-col-meta,
+.factory-universal-table-scroll table.l td.factory-col-meta,
+.factory-universal-table-scroll table.l th.factory-col-text,
+.factory-universal-table-scroll table.l td.factory-col-text,
+.factory-universal-table-scroll table.l th.factory-col-subwarehouse,
+.factory-universal-table-scroll table.l td.factory-col-subwarehouse {
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  hyphens: auto;
+  line-height: 1.45;
+}
+
+/* Numeric, date and code columns stay on one line: wrapping them hurts
+   scanning far more than a little extra width. */
+.factory-table-scroll table.l td.factory-col-number,
+.factory-table-scroll table.l th.factory-col-number,
+.factory-table-scroll table.l td.factory-col-date,
+.factory-table-scroll table.l th.factory-col-date,
+.factory-table-scroll table.l td.factory-col-time,
+.factory-table-scroll table.l th.factory-col-time,
+.factory-table-scroll table.l td.factory-col-code,
+.factory-table-scroll table.l th.factory-col-code,
+.factory-table-scroll table.l td.factory-col-quantity,
+.factory-table-scroll table.l th.factory-col-quantity,
+.factory-table-scroll table.l td.factory-col-unit,
+.factory-table-scroll table.l th.factory-col-unit {
+  white-space: nowrap;
+}
+
+@media (max-width: 860px) {
+  .factory-table-scroll table.l th,
+  .factory-table-scroll table.l td,
+  .factory-universal-table-scroll table.l th,
+  .factory-universal-table-scroll table.l td {
+    padding-inline: 6px;
+    padding-block: 6px;
+  }
+}
+
+/* Row-action buttons must fit inside the actions column they live in.
+   preview-ui.css forces min-width:max-content on these cells, which makes the
+   column ignore the width computed for it and pushes the table wider than its
+   scroll viewport. The computed width already fits the buttons, so drop it. */
+.factory-table-scroll table.l th.factory-action-column,
+.factory-table-scroll table.l td.factory-action-column,
+.factory-universal-table-scroll table.l th.factory-action-column,
+.factory-universal-table-scroll table.l td.factory-action-column {
+  min-width: 0 !important;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.factory-table-scroll table.l td.factory-action-column .factory-row-actions,
+.factory-table-scroll table.l td.factory-col-actions .factory-row-actions,
+.factory-universal-table-scroll table.l td.factory-action-column .factory-row-actions,
+.factory-universal-table-scroll table.l td.factory-col-actions .factory-row-actions {
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: nowrap;
+}
+
+/* ---------- status and actions live in separate columns ---------- */
+
+/* Status is its own narrow column: one chip, vertically centred, no wrapping. */
+.factory-table-scroll table.l td.factory-reference-status-cell,
+.factory-table-scroll table.l th:has(+ th.factory-reference-actions-cell) {
+  white-space: nowrap;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.factory-table-scroll table.l td.factory-reference-status-cell .factory-reference-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 100%;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.5;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+/* Actions column holds only icon buttons, so it can stay compact and centred. */
+.factory-table-scroll table.l td.factory-reference-actions-cell {
+  white-space: nowrap;
+  text-align: center;
+  vertical-align: middle;
+  padding-inline: 4px;
+}
+
+.factory-table-scroll table.l td.factory-reference-actions-cell .factory-row-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+
+/* ---------- readable type in both themes ---------- */
+
+/* Table body text must stay comfortably legible on the light and the dark
+   surface, so use the theme text token rather than a fixed grey. */
+.factory-table-scroll table.l tbody td,
+.factory-universal-table-scroll table.l tbody td {
+  color: var(--tx, var(--tx));
+  font-size: 12.5px;
+  line-height: 1.5;
+  font-weight: 500;
+}
+
+.factory-table-scroll table.l thead th,
+.factory-universal-table-scroll table.l thead th {
+  color: var(--tx, var(--tx));
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+/* Secondary lines inside a cell must not fall below a readable contrast. */
+.factory-table-scroll table.l tbody td small,
+.factory-universal-table-scroll table.l tbody td small {
+  color: var(--mu, var(--mu));
+  font-size: 12px;
+  font-weight: 600;
+}
+
+:root[data-theme="dark"] .factory-table-scroll table.l tbody td,
+:root[data-theme="dark"] .factory-universal-table-scroll table.l tbody td {
+  color: #eef4f9;
+}
+
+:root[data-theme="dark"] .factory-table-scroll table.l thead th,
+:root[data-theme="dark"] .factory-universal-table-scroll table.l thead th {
+  color: #f4f8fb;
+}
+
+:root[data-theme="dark"] .factory-table-scroll table.l tbody td small,
+:root[data-theme="dark"] .factory-universal-table-scroll table.l tbody td small {
+  color: #a9bccb;
+}
+
+@media (max-width: 860px) {
+  .factory-table-scroll table.l tbody td,
+  .factory-universal-table-scroll table.l tbody td {
+    font-size: 12px;
+  }
+}
+
+/* Some screens put the `factory-row-actions` class on the <td> itself. Its
+   display:flex then turns the cell into a flex box, which collapses the cell to
+   the width of the icons and leaves the header column far wider. Keep it a real
+   table cell and centre the icons inside it. */
+.factory-table-scroll table.l td.factory-row-actions,
+.factory-universal-table-scroll table.l td.factory-row-actions,
+.factory-table-scroll table.l th.factory-row-actions,
+.factory-universal-table-scroll table.l th.factory-row-actions {
+  display: table-cell !important;
+  white-space: nowrap;
+  text-align: center;
+  vertical-align: middle;
+  min-width: 0;
+}
+
+/* The cash-movement table pins itself to a 1120px fixed width, which is right
+   on a wide screen but forces a 800px horizontal scroll on a phone. Let the
+   stacked card layout take over below the desktop breakpoint. */
+@media (max-width: 1024px) {
+  .factory-cash-movements .factory-summary-cash-movements {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    table-layout: auto !important;
+  }
+
+  .factory-cash-movements .factory-summary-cash-movements th,
+  .factory-cash-movements .factory-summary-cash-movements td {
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    white-space: normal !important;
+  }
+}
+
+/* ---------- sidebar: a little narrower, easier to open on a phone ---------- */
+
+/* 240px was more room than the labels need; trimming it gives the content
+   column back some width without truncating any nav label. */
+#sb {
+  width: 216px;
+}
+
+#sb a {
+  font-size: 14px;
+}
+
+/* The drawer width on a phone is already capped by the 66vw rule in
+   style.css, which leaves a tappable backdrop, so only the menu button
+   needs work here: a real 44x44 target that sits above the backdrop. */
+@media (max-width: 860px) {
+  /* Keep the menu button a real 44x44 touch target and above the backdrop. */
+  #top #bg {
+    position: relative;
+    z-index: 31;
+    width: 44px !important;
+    min-width: 44px !important;
+    height: 44px !important;
+    min-height: 44px !important;
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+  }
+}
+
+/* ---------- dashboard period selector ---------- */
+
+.dash-period-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--bd, var(--bd));
+  border-radius: 10px;
+  background: var(--card, #fff);
+}
+
+.dash-period-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dash-period-chip,
+.dash-period-reset {
+  padding: 6px 11px;
+  border: 1px solid var(--bd, var(--bd));
+  border-radius: 999px;
+  background: transparent;
+  color: var(--tx, var(--tx));
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.dash-period-chip.is-on {
+  background: var(--pr, var(--pr));
+  border-color: var(--pr, var(--pr));
+  color: #fff;
+}
+
+.dash-period-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--mu, var(--mu));
+}
+
+.dash-period-field input {
+  min-width: 0;
+  max-width: 148px;
+  padding: 5px 7px;
+  border: 1px solid var(--bd, var(--bd));
+  border-radius: 7px;
+  background: var(--bg, var(--bg));
+  color: var(--tx, var(--tx));
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.dash-period-reset {
+  margin-inline-start: auto;
+}
+
+@media (max-width: 860px) {
+  .dash-period-bar {
+    gap: 6px;
+    padding: 7px 8px;
+  }
+
+  .dash-period-field {
+    flex: 1 1 45%;
+  }
+
+  .dash-period-field input {
+    max-width: none;
+    width: 100%;
+  }
+
+  .dash-period-reset {
+    flex: 1 1 100%;
+    margin-inline-start: 0;
+    min-height: 36px;
+  }
+}
+
+/* ---------- production orders table ---------- */
+
+/* The quantity header is long ("الكمية المطلوبة / المستلمة") while the column
+   only holds a short number, so let the header wrap instead of being clipped.
+   table.l th sets white-space:nowrap in preview-ui.css, hence the !important. */
+.factory-table-scroll table.l thead th.factory-col-quantity,
+.factory-universal-table-scroll table.l thead th.factory-col-quantity {
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+}
+
+/* Mixing plain .g buttons with icon buttons made one cell show two different
+   sizes (28px and 32px). Normalise every action icon in a row to one square.
+   .factory-icon-action is pinned to 28px with !important in style.css, so the
+   selector has to be at least as specific and win on importance too. */
+.factory-table-scroll table.l td.factory-action-column button,
+.factory-table-scroll table.l td.factory-row-actions button,
+.factory-universal-table-scroll table.l td.factory-action-column button,
+.factory-universal-table-scroll table.l td.factory-row-actions button,
+.factory-table-scroll table.l td.factory-action-column button.factory-icon-action,
+.factory-table-scroll table.l td.factory-row-actions button.factory-icon-action,
+.factory-universal-table-scroll table.l td.factory-action-column button.factory-icon-action,
+.factory-universal-table-scroll table.l td.factory-row-actions button.factory-icon-action {
+  box-sizing: border-box;
+  flex: 0 0 30px !important;
+  width: 30px !important;
+  min-width: 30px !important;
+  max-width: 30px !important;
+  height: 30px !important;
+  min-height: 30px !important;
+  max-height: 30px !important;
+  padding: 0 !important;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  font-size: 14px;
+}
+
+/* Row heights followed whatever the tallest button was, so rows with a
+   primary action were 7px taller than the rest. The first row also carries a
+   12px top padding from preview-ui.css, which made it the tallest of all. */
+.factory-table-scroll table.l tbody td.factory-action-column,
+.factory-universal-table-scroll table.l tbody td.factory-action-column,
+.factory-table-scroll table.l tbody td.factory-row-actions,
+.factory-universal-table-scroll table.l tbody td.factory-row-actions,
+.factory-table-scroll table.l tbody tr:first-child td.factory-action-column,
+.factory-universal-table-scroll table.l tbody tr:first-child td.factory-action-column,
+.factory-table-scroll table.l tbody tr:first-child td.factory-row-actions,
+.factory-universal-table-scroll table.l tbody tr:first-child td.factory-row-actions {
+  padding-block: 4px !important;
+  vertical-align: middle;
+}
+
+/* ---------- cell clarity ---------- */
+
+/* Cell edges were only implied by row stripes, so long rows were hard to scan
+   across. A light vertical grid plus a stronger row divider makes each value
+   sit in an obvious box without turning the table into a spreadsheet. */
+@media (min-width: 861px) {
+  /* Mixing the border colour with the text colour is what makes the grid
+     actually visible: the plain border token sits at only 1.3:1 on white. */
+  .factory-table-scroll table.l > thead > tr > th,
+  .factory-universal-table-scroll table.l > thead > tr > th,
+  .factory-table-scroll table.l > tbody > tr > td,
+  .factory-universal-table-scroll table.l > tbody > tr > td {
+    border-inline-end: 1px solid color-mix(in srgb, var(--tbl-bd) 85%, var(--tx, var(--tx)) 15%);
+  }
+
+  .factory-table-scroll table.l > thead > tr > th:last-child,
+  .factory-universal-table-scroll table.l > thead > tr > th:last-child,
+  .factory-table-scroll table.l > tbody > tr > td:last-child,
+  .factory-universal-table-scroll table.l > tbody > tr > td:last-child {
+    border-inline-end: 0;
+  }
+
+  /* The header needs to read as a band, not as one more body row. */
+  .factory-table-scroll table.l > thead > tr > th,
+  .factory-universal-table-scroll table.l > thead > tr > th {
+    background: color-mix(in srgb, var(--tbl-head) 88%, var(--tx, var(--tx)) 5%);
+    border-bottom: 2px solid color-mix(in srgb, var(--tbl-bd) 60%, var(--tx, var(--tx)) 40%);
+  }
+
+  .factory-table-scroll table.l > tbody > tr > td,
+  .factory-universal-table-scroll table.l > tbody > tr > td {
+    border-bottom: 1px solid color-mix(in srgb, var(--tbl-bd) 70%, var(--tx, var(--tx)) 22%);
+  }
+
+
+  /* Slightly more breathing room so values do not touch the grid lines. */
+  .factory-table-scroll table.l > tbody > tr > td,
+  .factory-universal-table-scroll table.l > tbody > tr > td {
+    padding-inline: 10px;
+  }
+
+  /* A touch more stripe contrast: the previous 3% was nearly invisible. */
+  .factory-table-scroll table.l > tbody > tr:nth-child(even),
+  .factory-universal-table-scroll table.l > tbody > tr:nth-child(even) {
+    background: color-mix(in srgb, var(--pr, var(--pr)) 5%, transparent);
+  }
+
+  .factory-table-scroll table.l > tbody > tr:hover,
+  .factory-universal-table-scroll table.l > tbody > tr:hover {
+    background: color-mix(in srgb, var(--pr, var(--pr)) 11%, transparent);
+  }
+}
+
+/* ---------- dd/mm/yyyy date inputs ---------- */
+/* The native control paints its value in the browser locale and offers no way
+   to change that, so its text is made transparent and a formatted label is
+   layered on top. The input stays full-size and clickable, which keeps the
+   native calendar and the ISO .value intact. */
+.factory-date-wrap {
+  position: relative;
+  display: block;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.factory-date-wrap > input[type="date"] {
+  width: 100%;
+  color: transparent;
+  caret-color: transparent;
+}
+
+.factory-date-wrap > input[type="date"]::-webkit-datetime-edit,
+.factory-date-wrap > input[type="date"]::-webkit-datetime-edit-fields-wrapper {
+  color: transparent;
+}
+
+.factory-date-wrap > input[type="date"]::-webkit-calendar-picker-indicator {
+  opacity: .55;
+}
+
+.factory-date-display {
+  position: absolute;
+  inset-inline-start: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  font-size: inherit;
+  color: var(--tx, var(--tx));
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* RTL pages put the value on the right; LTR keeps it on the left. */
+[dir="rtl"] .factory-date-display { inset-inline-start: auto; inset-inline-end: 9px; }
+
+/* ---------- mobile touch targets ----------
+   Loaded last so it wins over the stacked per-screen overrides above.
+   44px is the minimum comfortable tap area on a phone. */
+@media (max-width: 860px) {
+  main button,
+  main .g,
+  main a.g,
+  main a.new,
+  main .ph button,
+  main .ph .row button,
+  .ph button,
+  .toolbar button,
+  .preview-toolbar button,
+  .filter-card button,
+  .filter-card .filter-actions button,
+  .filter-actions button,
+  .filter-controls button,
+  .factory-table-tools button,
+  .factory-fin-filters button,
+  .preview-module-tabs button,
+  .home-period-toggle,
+  .factory-save-action,
+  .factory-summary-period button,
+  .factory-theme-modes button {
+    min-height: 44px !important;
+    font-size: 13.5px !important;
+  }
+
+  /* Icon-only actions stay square so they are easy to hit without growing wide. */
+  main .factory-row-action,
+  main .factory-icon-action,
+  main .factory-bank-edit,
+  main .factory-bank-tree-toggle,
+  main .factory-history-icon,
+  main .tile-ico {
+    width: 44px !important;
+    min-width: 44px !important;
+    height: 44px !important;
+    min-height: 44px !important;
+  }
+
+  /* A 13px box is below the comfortable tap size; the box grows and the
+     label row keeps its height so rows do not collapse. */
+  /* Statement tabs and icon-only actions are taps too. */
+  .factory-fin-tabs button,
+  .factory-fin-filters button,
+  .preview-report-intro button,
+  .factory-summary-recent button,
+  .factory-statement-tabs button,
+  .factory-statements-grid button {
+    min-height: 44px !important;
+    font-size: 13px !important;
+  }
+  /* 44px of tappable area without 44px of visible box: the icon keeps a
+     30px footprint and ::after expands the touch target to 44px, so rows stay
+     compact while the control is still comfortable to hit. */
+  main .factory-icon-action,
+  main .factory-bank-edit,
+  main .factory-bank-tree-toggle {
+    position: relative;
+    width: 30px !important;
+    min-width: 30px !important;
+    height: 30px !important;
+    min-height: 30px !important;
+    max-width: 30px !important;
+    max-height: 30px !important;
+  }
+  main .factory-icon-action::after,
+  main .factory-bank-edit::after,
+  main .factory-bank-tree-toggle::after {
+    content: '';
+    position: absolute;
+    inset: -7px;
+  }
+
+  /* Row action icons are pinned to 30px for desktop density above, including a
+     `button.factory-icon-action` variant that outranks the plain `button` form.
+     These selectors repeat that extra class so the 44px target actually wins. */
+  .factory-table-scroll table.l td.factory-action-column button,
+  .factory-table-scroll table.l td.factory-row-actions button,
+  .factory-universal-table-scroll table.l td.factory-action-column button,
+  .factory-universal-table-scroll table.l td.factory-row-actions button,
+  .factory-table-scroll table.l td.factory-action-column button.factory-icon-action,
+  .factory-table-scroll table.l td.factory-row-actions button.factory-icon-action,
+  .factory-universal-table-scroll table.l td.factory-action-column button.factory-icon-action,
+  .factory-universal-table-scroll table.l td.factory-row-actions button.factory-icon-action,
+  .factory-table-scroll table.l td.factory-col-actions button.factory-icon-action,
+  .factory-universal-table-scroll table.l td.factory-col-actions button.factory-icon-action {
+    flex: 0 0 44px !important;
+    width: 44px !important;
+    min-width: 44px !important;
+    max-width: 44px !important;
+    height: 44px !important;
+    min-height: 44px !important;
+    max-height: 44px !important;
+  }
+
+  main input[type="checkbox"],
+  .filter-card input[type="checkbox"],
+  .row input[type="checkbox"] {
+    width: 20px;
+    min-width: 20px;
+    height: 20px;
+    min-height: 20px;
+    accent-color: var(--pr);
+    cursor: pointer;
+  }
+}
+
+/* ---------- compact density (desktop / tablet) ----------
+ * Row actions were wrapping onto a second line because cells carried 9px of
+ * vertical padding plus full-height buttons. Tighter cells and smaller
+ * in-row controls keep every action on the row's own line, which also cuts
+ * the height of each section. Touch targets stay >= 40px below 760px.
+ */
+@media (min-width: 761px) {
+  table.l td,
+  table.l th {
+    padding: var(--tbl-pad-y) var(--tbl-pad-x);
+    line-height: 1.35;
+  }
+  table.l tbody tr {
+    min-height: var(--tbl-row-min);
+  }
+  /* In-row controls: icon buttons and inline actions never stretch a row. */
+  table.l td button,
+  table.l td .g,
+  table.l td .d,
+  table.l td a {
+    min-height: var(--tbl-ctl);
+    height: var(--tbl-ctl);
+    padding: 0 7px;
+    font-size: 12px;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    vertical-align: middle;
+  }
+  table.l td button:not(.g):not(.d) {
+    padding: 0 10px;
+  }
+  table.l td .factory-action-column,
+  table.l td.factory-action-column,
+  table.l th.factory-action-column {
+    width: 1%;
+    white-space: nowrap;
+  }
+  /* Numeric cells stay on one line so they cannot force extra height. */
+  table.l td.factory-ledger-number,
+  table.l td[dir="ltr"] {
+    white-space: nowrap;
+  }
+}
