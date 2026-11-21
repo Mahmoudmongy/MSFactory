@@ -112,12 +112,13 @@ class InventoryService:
         self.db.add(item)
         self.db.flush()
 
+        barcode = fields.get("barcode", "")
         if variants:
             for raw in variants:
                 self._add_variant(item, raw)
         else:
             # A variant-free item still needs one row so stock has a target.
-            self._add_variant(item, {})
+            self._add_variant(item, {"barcode": barcode} if barcode else {})
 
         self.audit.record(
             action="item.create",

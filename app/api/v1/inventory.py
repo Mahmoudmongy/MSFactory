@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ...core.permissions import Permission
+from ...core.security import DOCUMENT_TOKEN_MINUTES, create_document_token
 from ...db.models import ItemGroup, StockMovement, UnitOfMeasure
 from ...db.session import get_session
 from ...repositories.inventory import ItemRepository, UnitRepository, WarehouseRepository
@@ -150,10 +151,33 @@ def create_item(
         default_warehouse_id=payload.default_warehouse_id,
         image_url=payload.image_url,
         notes=payload.notes,
+        barcode=payload.barcode,
     )
     db.commit()
     return ItemDetailOut.model_validate(
         {**ItemOut.model_validate(item).model_dump(), "variants": service.items.variants(item.id)}
+    )
+
+
+@router.get("/items/by-barcode/{barcode}", response_model=ItemDetailOut)
+def get_item_by_barcode(
+    barcode: str,
+    principal: Principal = Depends(require(Permission.ITEM_VIEW)),
+    db: Session = Depends(get_session),
+):
+    """Resolve a scanned code to one item, for the invoice line scanner.
+
+    404 rather than an empty list: the caller is a scanner that needs to know
+    the code is unknown, so it can say so instead of silently adding nothing.
+    """
+    item = ItemRepository(db, principal.company_id).by_barcode(barcode)
+    if not item:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "barcode_not_found", "message": "لا يوجد صنف بهذا الباركود"},
+        )
+    return ItemDetailOut.model_validate(
+        {**ItemOut.model_validate(item).model_dump(), "variants": item.variants}
     )
 
 
@@ -179,7 +203,12 @@ def update_item(
 ):
     repo = ItemRepository(db, principal.company_id)
     item = repo.get(item_id)
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    changes = payload.model_dump(exclude_unset=True)
+    # barcode is not a column: it is the first variant's code, so it is set
+    # through the property rather than through setattr on the item.
+    if "barcode" in changes:
+        item.barcode = changes.pop("barcode") or ""
+    for key, value in changes.items():
         setattr(item, key, value)
     db.flush()
     db.commit()
@@ -199,6 +228,23 @@ def add_variant(
 
 
 # -------------------------------------------------------------- warehouses
+
+
+@router.post("/item-labels/print-token")
+def item_labels_print_token(
+    principal: Principal = Depends(require(Permission.STOCK_VIEW)),
+):
+    """Mint a link that opens the barcode label sheet.
+
+    The token names the sheet, not the items: a batch of item ids is too long to
+    put in a JWT, so the ids ride in the query string and the route re-checks
+    each one against the token's company.
+    """
+    token = create_document_token(principal.user.id, principal.company_id, "item_labels", 0)
+    return {
+        "path": f"/documents/item-labels?t={token}",
+        "expires_in": DOCUMENT_TOKEN_MINUTES * 60,
+    }
 
 
 @router.get("/warehouses", response_model=list[WarehouseOut])

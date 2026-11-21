@@ -17,7 +17,8 @@ from datetime import date
 from decimal import Decimal
 from html import escape
 
-from ..db.models import Company, Contact, Invoice, InvoiceLine, Payment
+from ..db.models import Company, Contact, Invoice, InvoiceLine, Payment, WorkOrder
+from .barcode import fits, to_svg
 
 # Arabic labels for the kinds the invoice model can hold. A kind that is not
 # here still prints; the raw value is shown rather than a blank cell.
@@ -31,6 +32,13 @@ KIND_LABELS = {
 PAYMENT_KIND_LABELS = {
     "receive": "سند قبض",
     "spend": "سند دفع",
+}
+
+WORK_ORDER_STATUS_LABELS = {
+    "draft": "مسودة",
+    "in_progress": "قيد التنفيذ",
+    "completed": "مكتمل",
+    "cancelled": "ملغى",
 }
 
 # Egyptian vouchers print the amount in words next to the figure, because that
@@ -695,3 +703,170 @@ def payment_title(payment: Payment) -> str:
     kind = PAYMENT_KIND_LABELS.get(payment.kind, payment.kind)
     safe_number = "".join(ch for ch in payment.number if ch.isalnum() or ch in "-_")
     return f"{kind}-{safe_number}"
+
+
+def render_work_order(
+    order: WorkOrder,
+    company: Company,
+    settings: dict[str, str],
+    *,
+    item_name: str = "",
+    warehouse_name: str = "",
+    material_names: dict[int, str] | None = None,
+) -> str:
+    """Build the printable production order a workshop hands to the floor.
+
+    The shop-floor copy is not an invoice: nobody pays against it. It exists so
+    the person pulling materials has the order number, the quantity to make and
+    the exact material list in hand, with a line to sign when the goods come
+    back. Names are passed in rather than read from the relationships so this
+    function cannot reach another tenant's rows, the same rule the invoice and
+    voucher renderers follow.
+    """
+    company_name, brand_meta, logo_html = _company_meta(company, settings)
+    names = material_names or {}
+    status = WORK_ORDER_STATUS_LABELS.get(order.status, order.status)
+    currency = company.base_currency or "EGP"
+
+    material_rows = []
+    for index, material in enumerate(order.materials, start=1):
+        material_rows.append(
+            f"""<tr>
+          <td class="num">{index}</td>
+          <td>{_text(names.get(material.item_id, f"#{material.item_id}"))}</td>
+          <td class="num">{_amount(material.quantity)}</td>
+          <td>{_text(material.notes)}</td>
+        </tr>"""
+        )
+    if not material_rows:
+        material_rows.append(
+            '<tr><td colspan="4" style="text-align:center;color:#6b7280">'
+            "لم تُحدَّد مواد لهذا الأمر</td></tr>"
+        )
+
+    produced = Decimal(str(order.produced_quantity or 0))
+    planned = Decimal(str(order.quantity or 0))
+    due_html = f'<div class="line">تاريخ التسليم: {_date(order.due_date)}</div>' if order.due_date else ""
+    notes_html = f'<div class="line">ملاحظات: {_text(order.notes)}</div>' if order.notes else ""
+
+    return _page(
+        f"أمر إنتاج {order.number}",
+        f"""    <div class="head">
+      {_brand_block(company_name, brand_meta, logo_html)}
+      {_doc_block("أمر إنتاج", order.number, status)}
+    </div>
+
+    <div class="parties">
+      <div class="party">
+        <h3>المنتج</h3>
+        <div class="line">{_text(item_name or f"#{order.item_id}")}</div>
+        <div class="line">الكمية المطلوبة: <span class="num">{_amount(planned)}</span></div>
+        <div class="line">الكمية المنتجة: <span class="num">{_amount(produced)}</span></div>
+      </div>
+      <div class="party">
+        <h3>بيانات الأمر</h3>
+        <div class="line">تاريخ البدء: {_date(order.start_date)}</div>
+        {due_html}
+        <div class="line">المخزن: {_text(warehouse_name or f"#{order.warehouse_id}")}</div>
+        <div class="line">العملة: {_text(currency)}</div>
+        {notes_html}
+      </div>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th class="num">#</th>
+          <th>المادة الخام</th>
+          <th class="num">الكمية</th>
+          <th>ملاحظات</th>
+        </tr>
+      </thead>
+      <tbody>
+        {"".join(material_rows)}
+      </tbody>
+    </table>
+
+    <div class="signatures">
+      <div class="sig"><span>أمين المخزن</span></div>
+      <div class="sig"><span>المشرف</span></div>
+      <div class="sig"><span>المدير</span></div>
+    </div>
+
+    {f'<div class="footer">{_text(settings.get("invoice_footer", ""))}</div>'
+     if settings.get("invoice_footer") else ""}""",
+    )
+
+
+def work_order_title(order: WorkOrder) -> str:
+    """A filename-safe description used for the browser's suggested name."""
+    safe_number = "".join(ch for ch in order.number if ch.isalnum() or ch in "-_")
+    return f"work-order-{safe_number}"
+
+
+# A 50mm label keeps 2mm of padding on each side, so the bars get the rest.
+LABEL_BARCODE_MM = 46.0
+
+_LABEL_CSS = """
+<style>
+  .labels { display: flex; flex-wrap: wrap; gap: 4mm; }
+  .label {
+    width: 50mm; padding: 2mm; border: 1px dashed #cbd5e1;
+    box-sizing: border-box; break-inside: avoid; text-align: center;
+  }
+  .label__name { font-size: 9pt; font-weight: 700; line-height: 1.2; margin-bottom: 1mm; }
+  .label__meta { font-size: 7pt; color: #475569; margin-top: 1mm; }
+  .label__code { font-size: 7pt; font-family: monospace; direction: ltr; margin-top: 0.5mm; }
+  .label--wide { border-color: #dc2626; }
+  .label__warn { font-size: 6.5pt; color: #b91c1c; margin-top: 0.5mm; }
+  @media print {
+    .label { border: none; }
+    .labels { gap: 2mm; }
+  }
+</style>
+"""
+
+
+def render_barcode_labels(
+    labels: list[dict],
+    company: Company,
+    settings: dict[str, str],
+) -> str:
+    """A sheet of scannable item labels.
+
+    Each entry is ``{"barcode", "name", "meta"}``. A label is printed, stuck on
+    a shelf or a garment bag and scanned at the till, so the barcode is the
+    largest thing on it and the text is a fallback for when a scanner is not to
+    hand — never the primary channel.
+    """
+    company_name, brand_meta, logo_html = _company_meta(company, settings)
+    cards = []
+    for label in labels:
+        name = label.get("name", "")
+        meta = label.get("meta", "")
+        code = label.get("barcode", "")
+        # A code wider than the label would be squeezed by ``max-width`` into
+        # bars too thin to scan, so it is flagged instead of printed as if fine.
+        too_wide = not fits(code, LABEL_BARCODE_MM)
+        cards.append(
+            f"""<div class="label{' label--wide' if too_wide else ''}">
+          <div class="label__name">{_text(name)}</div>
+          {to_svg(code)}
+          <div class="label__code">{_text(code)}</div>
+          {"<div class='label__warn'>الباركود أطول من الملصق — اختصره</div>" if too_wide else ""}
+          {f'<div class="label__meta">{_text(meta)}</div>' if meta else ""}
+        </div>"""
+        )
+    body = "".join(cards) if cards else (
+        '<p style="color:#6b7280">لا توجد أصناف لها باركود لطباعتها</p>'
+    )
+
+    return _page(
+        "ملصقات باركود",
+        f"""    <div class="head">
+      {_brand_block(company_name, brand_meta, logo_html)}
+      {_doc_block("ملصقات باركود", f"{len(cards)} ملصق")}
+    </div>
+    {_LABEL_CSS}
+    <div class="labels">{body}</div>""",
+    )

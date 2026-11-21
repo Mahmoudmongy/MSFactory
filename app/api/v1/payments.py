@@ -1,27 +1,72 @@
 """Payment endpoints."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Header, status
+from datetime import date
+from urllib.parse import quote
+
+from fastapi import APIRouter, Depends, Header, Response, status
 from sqlalchemy.orm import Session
 
 from ...core.permissions import Permission
 from ...core.security import DOCUMENT_TOKEN_MINUTES, create_document_token
 from ...db.session import get_session
+from ...repositories.core import SettingRepository
 from ...services.payments import PaymentService
+from ...services.reports.excel import build_workbook, suggested_filename
 from ..v1.deps import Principal, require
 from ..v1.idempotency import replay_or_execute
 from ..v1.schemas import PaymentCreate, PaymentOut
 
 router = APIRouter(prefix="/payments", tags=["payments"])
 
+XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
 
 @router.get("", response_model=list[PaymentOut])
 def list_payments(
     kind: str | None = None,
+    start: date | None = None,
+    end: date | None = None,
     principal: Principal = Depends(require(Permission.PAYMENT_VIEW)),
     db: Session = Depends(get_session),
 ):
-    return PaymentService(db, principal.company_id, principal.user.id).list(kind=kind)
+    return PaymentService(db, principal.company_id, principal.user.id).list(kind=kind, start=start, end=end)
+
+
+@router.get("/export.xlsx")
+def export_payments(
+    kind: str | None = None,
+    start: date | None = None,
+    end: date | None = None,
+    principal: Principal = Depends(require(Permission.PAYMENT_VIEW)),
+    db: Session = Depends(get_session),
+):
+    """Download the vouchers as a workbook, with the same filters as the screen."""
+    payments = PaymentService(db, principal.company_id, principal.user.id).list(
+        kind=kind, start=start, end=end
+    )
+    company_name = SettingRepository(db, principal.company_id).get("company_name", "")
+    rows = [
+        {
+            "number": payment.number,
+            "date": payment.date,
+            "kind": "تحصيل" if payment.kind == "receive" else "صرف",
+            "contact": payment.contact.name if payment.contact else "",
+            "amount": payment.amount,
+            "reference": payment.reference or "",
+        }
+        for payment in payments
+    ]
+    payload = {"company": company_name, "count": len(rows), "payments": rows}
+    return Response(
+        content=build_workbook("payments", payload, title="السندات"),
+        media_type=XLSX_MEDIA_TYPE,
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename*=UTF-8''{quote(suggested_filename('payments', company_name))}"
+            )
+        },
+    )
 
 
 @router.post("", response_model=PaymentOut, status_code=status.HTTP_201_CREATED)

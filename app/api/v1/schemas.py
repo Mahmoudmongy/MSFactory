@@ -393,6 +393,7 @@ class ItemCreate(BaseModel):
     default_warehouse_id: int | None = None
     image_url: str = ""
     notes: str = ""
+    barcode: str = ""
     variants: list[VariantIn] = []
 
 
@@ -411,6 +412,7 @@ class ItemUpdate(BaseModel):
     default_warehouse_id: int | None = None
     image_url: str | None = None
     notes: str | None = None
+    barcode: str | None = None
     is_active: bool | None = None
 
 
@@ -428,6 +430,7 @@ class ItemOut(ORMModel):
     sale_price: Decimal
     reorder_level: Decimal
     default_warehouse_id: int | None = None
+    barcode: str = ""
     is_active: bool
 
 

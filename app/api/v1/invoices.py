@@ -1,13 +1,18 @@
 """Invoice endpoints with idempotent creation."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Header, status
+from datetime import date
+from urllib.parse import quote
+
+from fastapi import APIRouter, Depends, Header, Response, status
 from sqlalchemy.orm import Session
 
 from ...core.permissions import Permission
 from ...core.security import DOCUMENT_TOKEN_MINUTES, create_document_token
 from ...db.session import get_session
+from ...repositories.core import SettingRepository
 from ...services.invoices import InvoiceService
+from ...services.reports.excel import build_workbook, suggested_filename
 from ..v1.deps import Principal, require
 from ..v1.idempotency import replay_or_execute
 from ..v1.schemas import (
@@ -21,15 +26,75 @@ from ..v1.schemas import (
 
 router = APIRouter(prefix="/invoices", tags=["invoices"])
 
+XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+# The workbook is read by a person, so the document kind is written in Arabic
+# rather than as the internal key.
+KIND_LABELS_AR = {
+    "sales": "فاتورة بيع",
+    "purchase": "فاتورة شراء",
+    "sales_return": "مرتجع بيع",
+    "purchase_return": "مرتجع شراء",
+}
+
 
 @router.get("", response_model=list[InvoiceOut])
 def list_invoices(
     kind: str | None = None,
     contact_id: int | None = None,
+    start: date | None = None,
+    end: date | None = None,
     principal: Principal = Depends(require(Permission.INVOICE_VIEW)),
     db: Session = Depends(get_session),
 ):
-    return InvoiceService(db, principal.company_id, principal.user.id).list(kind=kind, contact_id=contact_id)
+    return InvoiceService(db, principal.company_id, principal.user.id).list(
+        kind=kind, contact_id=contact_id, start=start, end=end
+    )
+
+
+@router.get("/export.xlsx")
+def export_invoices(
+    kind: str | None = None,
+    start: date | None = None,
+    end: date | None = None,
+    principal: Principal = Depends(require(Permission.INVOICE_VIEW)),
+    db: Session = Depends(get_session),
+):
+    """Download the invoice list as a workbook, with the same filters as the screen."""
+    invoices = InvoiceService(db, principal.company_id, principal.user.id).list(
+        kind=kind, start=start, end=end
+    )
+    company_name = SettingRepository(db, principal.company_id).get("company_name", "")
+    rows = [
+        {
+            "number": invoice.number,
+            "issue_date": invoice.issue_date,
+            "kind": KIND_LABELS_AR.get(invoice.kind, invoice.kind),
+            "contact": invoice.contact.name if invoice.contact else "",
+            "status": invoice.status,
+            "subtotal": invoice.subtotal,
+            "discount_total": invoice.discount_total,
+            "tax_total": invoice.tax_total,
+            "total": invoice.total,
+            "amount_paid": invoice.amount_paid,
+            "currency": invoice.currency or "",
+        }
+        for invoice in invoices
+    ]
+    payload = {
+        "company": company_name,
+        "count": len(rows),
+        "invoices": rows,
+    }
+    return Response(
+        content=build_workbook("invoices", payload, title="الفواتير"),
+        media_type=XLSX_MEDIA_TYPE,
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename*=UTF-8''{quote(suggested_filename('invoices', company_name))}"
+            )
+        },
+    )
 
 
 @router.get("/{invoice_id}", response_model=InvoiceOut)

@@ -32,8 +32,13 @@ class PaymentService:
         self.audit = AuditRepository(db, company_id)
         self.accounting = AccountingService(db, company_id, user_id)
 
-    def list(self, kind: str | None = None) -> list[Payment]:
-        return self.payments.list(kind=kind)
+    def list(
+        self,
+        kind: str | None = None,
+        start: date | None = None,
+        end: date | None = None,
+    ) -> list[Payment]:
+        return self.payments.list(kind=kind, start=start, end=end)
 
     def create(
         self,

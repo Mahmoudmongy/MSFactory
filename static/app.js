@@ -181,7 +181,25 @@ export const escapeHtml = (value) =>
 
 const CURRENCY = { EGP: "ج.م", SAR: "ر.س", AED: "د.إ", USD: "$", EUR: "€" };
 
+/** Privacy mode masks every amount on screen, for showing the app to someone. */
+let privacyMode = false;
+
+export function setPrivacyMode(on) {
+  privacyMode = Boolean(on);
+  document.documentElement.dataset.privacy = privacyMode ? "on" : "off";
+  try {
+    localStorage.setItem("msfactory.privacy", privacyMode ? "1" : "0");
+  } catch {
+    /* storage may be blocked; the mask still applies this session */
+  }
+}
+
+export function isPrivacyMode() {
+  return privacyMode;
+}
+
 export function money(value, currency) {
+  if (privacyMode) return "•••••";
   const amount = Number(value ?? 0);
   // Latin digits (1234, not ١٢٣٤) while the currency symbol stays Arabic.
   const formatted = new Intl.NumberFormat("en-US", {
@@ -383,6 +401,8 @@ function appbar({ title, subtitle, back, actions = "" }) {
     <h1 class="appbar__title">${escapeHtml(title)}
       ${subtitle ? `<span class="appbar__sub">${escapeHtml(subtitle)}</span>` : ""}</h1>
     ${actions}
+    <button class="icon-btn" data-toggle-privacy aria-label="إخفاء الأرقام"
+      aria-pressed="${isPrivacyMode()}">${isPrivacyMode() ? "🙈" : "👁"}</button>
     <button class="icon-btn" data-open-theme aria-label="ألوان البرنامج">🎨</button>
     <button class="icon-btn" data-toggle-dark aria-label="تبديل الوضع الليلي">${dark ? "☀" : "☾"}</button>
   </header>`);
@@ -482,6 +502,7 @@ function loadTheme() {
     const saved = JSON.parse(localStorage.getItem("msfactory.theme") || "null");
     if (saved) applyTheme(saved.name, saved.color);
     applyDarkMode(localStorage.getItem("msfactory.dark") === "1");
+    setPrivacyMode(localStorage.getItem("msfactory.privacy") === "1");
   } catch {
     /* ignore */
   }
@@ -520,6 +541,45 @@ function subTabs(group, tabs, active) {
 function hashParam(name, fallback = "") {
   const query = (location.hash.split("?")[1] || "");
   return new URLSearchParams(query).get(name) || fallback;
+}
+
+/**
+ * A from/to period filter for a list screen.
+ *
+ * The values live in the hash like the sub-tabs do, so a filtered list is
+ * linkable and survives a reload. Blank fields send nothing: the server then
+ * returns everything, which is the behaviour the screen had before the filter
+ * existed.
+ */
+function periodFilter(group, start, end) {
+  const active = Boolean(start || end);
+  return `<div class="period-filter">
+    <div class="period-filter__fields">
+      <div class="field"><label class="field__label">من تاريخ</label>
+        <input class="input" type="date" data-period="${group}:start" value="${escapeHtml(start)}" /></div>
+      <div class="field"><label class="field__label">إلى تاريخ</label>
+        <input class="input" type="date" data-period="${group}:end" value="${escapeHtml(end)}" /></div>
+    </div>
+    <button class="btn btn--ghost btn--sm" type="button" data-clear-period="${group}"
+      ${active ? "" : "disabled"}>✕ مسح الفلتر</button>
+  </div>`;
+}
+
+/**
+ * Rewrite the hash query in place, keeping keys the caller did not name.
+ *
+ * A null value removes the key. Everything happens in one hash write, so the
+ * screen re-renders once instead of once per field.
+ */
+function setHashQuery(changes) {
+  const [path, query] = location.hash.split("?");
+  const params = new URLSearchParams(query || "");
+  for (const [key, value] of Object.entries(changes)) {
+    if (value) params.set(key, value);
+    else params.delete(key);
+  }
+  const qs = params.toString();
+  location.hash = `${path}${qs ? `?${qs}` : ""}`;
 }
 
 // ---------------------------------------------------------------- auth screens
@@ -663,7 +723,14 @@ async function renderDashboard() {
 async function renderInvoices() {
   setScreen(spinner(), { appbar: appbar({ title: "الفواتير والمرتجعات" }), tabbar: tabbar() });
   try {
-    const invoices = await api("/invoices");
+    const start = hashParam("inv_start");
+    const end = hashParam("inv_end");
+    // Filtering on the server keeps a long history out of the phone's memory;
+    // the period is part of the hash, so the list reloads when it changes.
+    const query = new URLSearchParams();
+    if (start) query.set("start", start);
+    if (end) query.set("end", end);
+    const invoices = await api(`/invoices${query.toString() ? `?${query}` : ""}`);
     await loadContacts();
 
     const view = hashParam("invoices", "sales");
@@ -700,13 +767,38 @@ async function renderInvoices() {
           ],
           view
         )}
+        ${periodFilter("inv", start, end)}
         <div class="card card--flush">
-          ${shown.length ? `<ul class="list">${rows}</ul>` : emptyState("🧾", "لا توجد مستندات", `${KIND_LABELS[view]} ستظهر هنا`)}
+          ${shown.length
+            ? `<ul class="list">${rows}</ul>`
+            : emptyState(
+                "🧾",
+                "لا توجد مستندات",
+                start || end ? "لا شيء في هذه الفترة — جرّب توسيع الفلتر" : `${KIND_LABELS[view]} ستظهر هنا`
+              )}
         </div>
-        <div class="action-bar"><a class="btn" href="#/invoices/new">＋ فاتورة جديدة</a></div>
+        <div class="action-bar">
+          <a class="btn" href="#/invoices/new">＋ فاتورة جديدة</a>
+          <button class="btn btn--ghost" type="button" data-export-invoices>⬇ Excel</button>
+        </div>
       </div>`),
       { appbar: appbar({ title: "الفواتير والمرتجعات" }), tabbar: tabbar() }
     );
+
+    document.querySelector("[data-export-invoices]").onclick = async (event) => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      try {
+        const params = {};
+        if (start) params.start = start;
+        if (end) params.end = end;
+        await downloadWorkbook("/invoices/export.xlsx", params, "الفواتير");
+      } catch (error) {
+        toast(error.message, "error");
+      } finally {
+        button.disabled = false;
+      }
+    };
   } catch (error) {
     setScreen(emptyState("⚠️", "خطأ", error.message), { tabbar: tabbar() });
   }
@@ -837,7 +929,10 @@ async function renderInvoiceForm({ invoiceId } = {}) {
 
     <div class="section-title">بنود الفاتورة</div>
     <div id="lines"></div>
-    <button type="button" class="btn btn--ghost btn--block" data-add-line>＋ إضافة بند</button>
+    <div class="line-actions">
+      <button type="button" class="btn btn--ghost" data-add-line>＋ إضافة بند</button>
+      <button type="button" class="btn btn--ghost" data-scan-line>📷 مسح باركود</button>
+    </div>
 
     <div class="card" style="margin-top:12px">
       <div class="totals">
@@ -975,6 +1070,66 @@ async function renderInvoiceForm({ invoiceId } = {}) {
   }
 
   view.querySelector("[data-add-line]").onclick = () => addLine();
+
+  /* Scanning into an invoice: the code resolves to an item and a line is filled
+     in, so the user only adjusts quantity. An unknown code says so out loud —
+     a scanner that silently adds nothing looks broken, and the code may simply
+     not be in the books yet. */
+  async function addLineFromBarcode(code) {
+    const trimmed = String(code || "").trim();
+    if (!trimmed) return;
+    let item = null;
+    try {
+      item = await api(`/inventory/items/by-barcode/${encodeURIComponent(trimmed)}`);
+    } catch {
+      item = null;
+    }
+    if (!item) {
+      toast(`لا يوجد صنف بالباركود ${trimmed}`, "error");
+      return;
+    }
+    const line = {
+      description: itemLabel(item),
+      item_id: item.id,
+      quantity: 1,
+      unit_price: Number(kind === "purchase" ? item.purchase_price : item.sale_price) || 0,
+      discount_rate: 0,
+      tax_rate: defaultRate,
+    };
+    addLine(line);
+    recalc();
+    toast(`تمت إضافة ${itemLabel(item)}`, "success");
+  }
+
+  view.querySelector("[data-scan-line]").onclick = () => {
+    const form = el(`<form novalidate>
+      <div class="field"><label class="field__label">الباركود</label>
+        <div class="field--inline">
+          <input class="input num" name="code" inputmode="numeric" autofocus
+            placeholder="امسح الباركود أو اكتبه" />
+          <button class="btn btn--ghost" type="button" data-scan-now>📷</button>
+        </div>
+        <div class="field__hint">أو استخدم ماسح USB — يكتب في الحقل مباشرة</div>
+      </div>
+      <button class="btn btn--block" type="submit">إضافة البند</button>
+    </form>`);
+    const close = openSheet("مسح باركود", form);
+    const submit = async () => {
+      const code = form.elements.code.value;
+      close();
+      await addLineFromBarcode(code);
+    };
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      submit();
+    };
+    form.querySelector("[data-scan-now]").onclick = () =>
+      scanBarcode((value) => {
+        form.elements.code.value = value;
+        submit();
+      });
+    form.elements.code.focus();
+  };
   view.querySelectorAll("[data-kind]").forEach((button) => {
     button.onclick = () => {
       kind = button.dataset.kind;
@@ -1389,6 +1544,7 @@ async function renderWorkOrderDetail(orderId) {
         <p style="margin:8px 0 0;color:var(--ink-700)">${escapeHtml(order.notes)}</p></div>` : ""}
 
       <div class="row-actions">
+        <button class="btn btn--ghost" data-print-order>🖨️ طباعة الأمر</button>
         ${order.status === "draft" && store.can("production.manage")
           ? '<button class="btn" data-start>▶ بدء التنفيذ</button>' : ""}
         ${["draft", "in_progress"].includes(order.status) && store.can("production.manage")
@@ -1407,6 +1563,9 @@ async function renderWorkOrderDetail(orderId) {
         toast(error.message, "error");
       }
     };
+    view.querySelector("[data-print-order]")?.addEventListener("click", (event) =>
+      printDocument(`/production/work-orders/${orderId}/print-token`, event.currentTarget)
+    );
     view.querySelector("[data-start]")?.addEventListener("click", () => act("start", {}, "بدأ التنفيذ"));
     view.querySelector("[data-complete]")?.addEventListener("click", () =>
       act("complete", { produced_quantity: Number(order.quantity) }, "تم إتمام الإنتاج")
@@ -1480,7 +1639,15 @@ function buildPaymentForm({ kind, contactId, amount, cashAccounts, invoiceId, on
 async function renderPayments({ autoNew } = {}) {
   setScreen(spinner(), { appbar: appbar({ title: "المقبوضات والمدفوعات" }), tabbar: tabbar() });
   try {
-    const [payments, accounts] = await Promise.all([api("/payments"), loadAccounts()]);
+    const start = hashParam("pay_start");
+    const end = hashParam("pay_end");
+    const query = new URLSearchParams();
+    if (start) query.set("start", start);
+    if (end) query.set("end", end);
+    const [payments, accounts] = await Promise.all([
+      api(`/payments${query.toString() ? `?${query}` : ""}`),
+      loadAccounts(),
+    ]);
     await loadContacts();
     const cashAccounts = accounts.filter((a) => ["1010", "1020"].includes(a.code));
 
@@ -1513,14 +1680,20 @@ async function renderPayments({ autoNew } = {}) {
           ],
           kind
         )}
+        ${periodFilter("pay", start, end)}
         <div class="card card--flush">
           ${shown.length
             ? `<ul class="list">${rows}</ul>`
-            : emptyState("💵", isPaymentsTab ? "لا توجد سندات دفع" : "لا توجد سندات قبض", "سجّل تحصيلاً من عميل أو دفعة لمورد")}
+            : emptyState(
+                "💵",
+                isPaymentsTab ? "لا توجد سندات دفع" : "لا توجد سندات قبض",
+                start || end ? "لا شيء في هذه الفترة — جرّب توسيع الفلتر" : "سجّل تحصيلاً من عميل أو دفعة لمورد"
+              )}
         </div>
         <div class="action-bar">
           <button class="btn" data-new="receive">＋ سند قبض</button>
           <button class="btn btn--ghost" data-new="spend">＋ سند دفع</button>
+          <button class="btn btn--ghost" type="button" data-export-payments>⬇ Excel</button>
         </div>
       </div>`),
       { appbar: appbar({ title: "المقبوضات والمدفوعات" }), tabbar: tabbar() }
@@ -1533,6 +1706,21 @@ async function renderPayments({ autoNew } = {}) {
     document.querySelectorAll("[data-print-payment]").forEach((button) => {
       button.onclick = () => printDocument(`/payments/${button.dataset.printPayment}/print-token`);
     });
+
+    document.querySelector("[data-export-payments]").onclick = async (event) => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      try {
+        const params = {};
+        if (start) params.start = start;
+        if (end) params.end = end;
+        await downloadWorkbook("/payments/export.xlsx", params, "السندات");
+      } catch (error) {
+        toast(error.message, "error");
+      } finally {
+        button.disabled = false;
+      }
+    };
 
     if (autoNew === "receive" || autoNew === "spend") startNewPayment(autoNew, cashAccounts);
   } catch (error) {
@@ -1547,11 +1735,20 @@ async function renderPayments({ autoNew } = {}) {
  * time window.open runs — browsers then block the popup and the button appears
  * to do nothing, so the user is told instead.
  */
-async function printDocument(tokenPath, button) {
+/**
+ * Open a printable document in a new tab.
+ *
+ * The token is minted first and travels in the URL instead of the access token,
+ * so the tab can be reloaded, bookmarked briefly or sent to a printer queue
+ * without leaking the session. ``extra`` appends query parameters the document
+ * itself needs — the item ids for a label sheet, for example.
+ */
+async function printDocument(tokenPath, button, extra) {
   if (button) button.disabled = true;
   try {
     const { path } = await api(tokenPath, { method: "POST" });
-    const win = window.open(`${API_BASE}${path}`, "_blank");
+    const query = new URLSearchParams(extra || {}).toString();
+    const win = window.open(`${API_BASE}${path}${query ? `&${query}` : ""}`, "_blank");
     if (!win) toast("المتصفح منع فتح نافذة الطباعة — اسمح بالنوافذ المنبثقة", "error");
   } catch (error) {
     toast(error.message, "error");
@@ -1998,15 +2195,21 @@ function reportFilterBar(spec) {
   return `<div class="card">${fields}<button class="btn btn--block" type="button" data-run>تشغيل التقرير</button></div>`;
 }
 
-async function downloadReport(key, params, label) {
-  const query = new URLSearchParams(params).toString();
-  const response = await fetch(`${API_BASE}/reports/${key}/export.xlsx${query ? `?${query}` : ""}`, {
+/**
+ * Fetch a workbook and hand it to the browser as a download.
+ *
+ * A plain link would not carry the bearer token, so the file is fetched with
+ * the usual headers and saved from a blob URL.
+ */
+async function downloadWorkbook(path, params, label) {
+  const query = new URLSearchParams(params || {}).toString();
+  const response = await fetch(`${API_BASE}${path}${query ? `?${query}` : ""}`, {
     headers: {
       Authorization: `Bearer ${store.accessToken}`,
       "X-Company-Id": String(store.companyId),
     },
   });
-  if (!response.ok) throw new Error("تعذّر تصدير التقرير");
+  if (!response.ok) throw new Error("تعذّر التصدير إلى Excel");
   const blob = await response.blob();
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -2017,6 +2220,10 @@ async function downloadReport(key, params, label) {
   link.remove();
   URL.revokeObjectURL(url);
   toast("تم تنزيل ملف Excel", "success");
+}
+
+function downloadReport(key, params, label) {
+  return downloadWorkbook(`/reports/${key}/export.xlsx`, params, label);
 }
 
 let reportCatalog = null;
@@ -2031,8 +2238,9 @@ async function renderReports() {
   try {
     const catalog = await loadReportCatalog();
     const view = el(`<div>
-      <div class="field"><input class="input" type="search" id="report-search"
-        placeholder="ابحث عن تقرير…" autocomplete="off" /></div>
+      <div class="field field--inline"><input class="input" type="search" id="report-search"
+        placeholder="ابحث عن تقرير…" autocomplete="off" />
+        <button class="btn btn--ghost btn--sm" type="button" data-clear-search hidden>مسح</button></div>
       <div data-categories>${catalog.categories
         .map(
           (category) => `<div data-category>
@@ -2061,15 +2269,23 @@ async function renderReports() {
 
     // A live filter: typing hides reports whose name does not match, and hides
     // a category once none of its reports match.
-    view.querySelector("#report-search").addEventListener("input", (event) => {
-      const term = event.target.value.trim();
+    const searchInput = view.querySelector("#report-search");
+    const clearButton = view.querySelector("[data-clear-search]");
+    const applyFilter = (term) => {
       view.querySelectorAll("[data-report]").forEach((node) => {
-        node.hidden = term && !node.dataset.label.includes(term);
+        node.hidden = Boolean(term) && !node.dataset.label.includes(term);
       });
       view.querySelectorAll("[data-category]").forEach((node) => {
         node.hidden = !node.querySelector("[data-report]:not([hidden])");
       });
-    });
+      clearButton.hidden = !term;
+    };
+    searchInput.addEventListener("input", (event) => applyFilter(event.target.value.trim()));
+    clearButton.onclick = () => {
+      searchInput.value = "";
+      applyFilter("");
+      searchInput.focus();
+    };
 
     setScreen(view, { appbar: appbar({ title: "التقارير" }), tabbar: tabbar() });
   } catch (error) {
@@ -2138,8 +2354,14 @@ async function renderReport(key, params = {}, back = "#/reports") {
 async function renderJournal() {
   setScreen(spinner(), { appbar: appbar({ title: "قيود اليومية", back: "#/reports" }) });
   try {
-    const entries = await api("/journal");
+    const start = hashParam("jr_start");
+    const end = hashParam("jr_end");
+    const query = new URLSearchParams();
+    if (start) query.set("start", start);
+    if (end) query.set("end", end);
+    const entries = await api(`/journal${query.toString() ? `?${query}` : ""}`);
     const view = el(`<div>
+      ${periodFilter("jr", start, end)}
       <div class="card card--flush">
         ${entries.length
           ? `<ul class="list">${entries
@@ -2156,7 +2378,11 @@ async function renderJournal() {
                 )}</div></div></li>`
               )
               .join("")}</ul>`
-          : emptyState("📒", "لا توجد قيود", "أنشئ قيداً يدوياً")}
+          : emptyState(
+              "📒",
+              "لا توجد قيود",
+              start || end ? "لا شيء في هذه الفترة — جرّب توسيع الفلتر" : "أنشئ قيداً يدوياً"
+            )}
       </div>
       <div class="action-bar"><a class="btn" href="#/journal/new">＋ قيد يدوي</a></div>
     </div>`);
@@ -2381,66 +2607,71 @@ async function renderAccounts() {
   }
 }
 
-/**
- * Add a cash or bank sub-account.
- *
- * The sheet only offers leaf accounts under 1010/1020 on purpose: the chart's
- * root and group headings are fixed, so there is no "general account" option to
- * pick. The API enforces the same rule, this just keeps the user from meeting
- * an error they could have avoided.
- */
+/* Any leaf account can be added from here, not just cash and bank. The API
+   allows a child under any parent of the same type; it only refuses a group
+   heading or a code outside the parent's branch. So every account of the
+   chosen type is offered as a parent — 1010 and 1020 included, which is where
+   sub-bank accounts like 1021 belong. */
 function openAccountSheet(accounts, onDone) {
-  const assets = accounts.filter((a) => a.type === "asset");
-  const roots = [
-    { value: "1010", label: "نقدية" },
-    { value: "1020", label: "بنك" },
-  ].filter((r) => assets.some((a) => a.code === r.value));
-  if (!roots.length) {
+  if (!accounts.length) {
     toast("دليل الحسابات لم يُهيأ بعد", "error");
     return;
   }
-  const parentOptions = assets
-    .filter((a) => /^10\d\d$/.test(a.code))
-    .map((a) => `<option value="${a.id}">${escapeHtml(a.code)} — ${escapeHtml(a.name_ar || a.name)}</option>`)
+
+  const typeLabel = { asset: "الأصول", liability: "الالتزامات", equity: "حقوق الملكية", income: "الإيرادات", expense: "المصروفات" };
+  const typeOptions = Object.keys(typeLabel)
+    .filter((type) => accounts.some((a) => a.type === type))
+    .map((type) => `<option value="${type}">${typeLabel[type]}</option>`)
     .join("");
 
   const form = el(`<form novalidate>
     <div class="field"><label class="field__label">النوع</label>
-      <select class="select" id="acc_kind">
-        ${roots.map((r) => `<option value="${r.value}">${r.label}</option>`).join("")}
-      </select></div>
+      <select class="select" id="acc_type">${typeOptions}</select></div>
+    <div class="field"><label class="field__label">الحساب الأب</label>
+      <select class="select" id="acc_parent"></select></div>
     <div class="field"><label class="field__label">الاسم</label>
-      <input class="input" id="acc_name" required placeholder="مثال: خزينة الفرع، بنك مصر" /></div>
+      <input class="input" id="acc_name" required placeholder="مثال: خزينة الفرع، مصروف إيجار" /></div>
     <div class="field"><label class="field__label">كود الحساب</label>
       <input class="input num" id="acc_code" placeholder="اتركه فارغاً للتوليد التلقائي" inputmode="numeric" /></div>
-    <div class="field"><label class="field__label">الحساب الأب</label>
-      <select class="select" id="acc_parent">
-        <option value="">حسب النوع (تلقائي)</option>${parentOptions}
-      </select></div>
     <p style="font-size:.8rem;color:var(--ink-500);margin:0 0 12px">
       الحسابات الرئيسية والتجميعية ثابتة ولا تُنشأ من هنا — بتضيف حساب فرعي فقط.
     </p>
     <button class="btn btn--block" type="submit">حفظ الحساب</button>
   </form>`);
 
-  const close = openSheet("حساب نقدية/بنك جديد", form);
+  const typeSelect = form.querySelector("#acc_type");
+  const parentSelect = form.querySelector("#acc_parent");
+
+  // The account's type is taken from its parent — the API rejects a mismatch —
+  // so the parent list follows the type selector.
+  const fillParents = () => {
+    const options = accounts
+      .filter((a) => a.type === typeSelect.value)
+      .sort((a, b) => a.code.localeCompare(b.code));
+    parentSelect.innerHTML = options
+      .map((a) => `<option value="${a.id}">${escapeHtml(a.code)} — ${escapeHtml(a.name_ar || a.name)}</option>`)
+      .join("");
+  };
+  typeSelect.onchange = fillParents;
+  fillParents();
+
+  const close = openSheet("حساب جديد", form);
   form.onsubmit = async (event) => {
     event.preventDefault();
-    const kind = form.querySelector("#acc_kind").value;
+    const type = typeSelect.value;
     const name = form.querySelector("#acc_name").value.trim();
     if (!name) return toast("أدخل اسم الحساب", "error");
-    const chosenParent = form.querySelector("#acc_parent").value;
-    const parentAccount = chosenParent
-      ? assets.find((a) => a.id === Number(chosenParent))
-      : assets.find((a) => a.code === kind);
-    const parent = parentAccount?.id ?? null;
+    const parentId = Number(parentSelect.value);
+    const parentAccount = accounts.find((a) => a.id === parentId);
+    if (!parentAccount) return toast("اختر الحساب الأب", "error");
     // Number the new account by continuing the parent's own code — 1021, 1022
     // under 1020 — because the API rejects a code outside the parent's prefix.
     let code = form.querySelector("#acc_code").value.trim();
     if (!code) {
-      const base = Number(parentAccount?.code ?? kind);
-      const siblings = assets.filter((a) => a.parent_id === parent);
-      const used = new Set(siblings.map((a) => Number(a.code)).filter(Number.isFinite));
+      const base = Number(parentAccount.code);
+      const used = new Set(
+        accounts.filter((a) => a.parent_id === parentId).map((a) => Number(a.code)).filter(Number.isFinite),
+      );
       let candidate = base + 1;
       while (used.has(candidate)) candidate += 1;
       code = String(candidate);
@@ -2448,7 +2679,7 @@ function openAccountSheet(accounts, onDone) {
     try {
       await api("/accounts", {
         method: "POST",
-        body: { code, name, name_ar: name, type: "asset", parent_id: parent, is_group: false },
+        body: { code, name, name_ar: name, type, parent_id: parentId, is_group: false },
       });
       toast("تم إضافة الحساب", "success");
       close();
@@ -2486,6 +2717,113 @@ const MOVEMENT_KIND_LABELS = {
 };
 
 const itemLabel = (item) => item?.name_ar || item?.name || "";
+
+/**
+ * One item's card: what is on hand, where it sits, and every movement that
+ * brought it there.
+ *
+ * This is the screen a shopkeeper opens when the count does not match — the
+ * stock tab answers "how much of everything", this answers "why is this one
+ * what it is", which is a different question.
+ */
+async function renderItemCard(itemId) {
+  setScreen(spinner(), { appbar: appbar({ title: "بطاقة الصنف", back: "#/inventory?inv=items" }) });
+  try {
+    const [item, stock, movements] = await Promise.all([
+      api(`/inventory/items/${itemId}`),
+      api("/inventory/stock"),
+      api(`/inventory/movements?item_id=${itemId}&limit=100`),
+    ]);
+    const { warehouses } = await loadInventoryLookups();
+    const warehouseName = (id) => warehouses.find((w) => w.id === id)?.name || `#${id}`;
+
+    const mine = stock.filter((row) => row.item_id === itemId);
+    const onHand = mine.reduce((sum, row) => sum + Number(row.quantity), 0);
+    const value = mine.reduce((sum, row) => sum + Number(row.value), 0);
+    const unit = mine[0]?.unit || "";
+
+    const stockRows = mine
+      .map(
+        (row) => `<li><div class="list__item">
+        <div class="list__main">
+          <div class="list__title">${escapeHtml(row.warehouse_name)}</div>
+          <div class="list__meta">${escapeHtml(row.unit)}${row.variant_code ? ` · ${escapeHtml(row.variant_code)}` : ""}</div>
+        </div>
+        <div style="text-align:end">
+          <div class="list__value num">${Number(row.quantity).toLocaleString("en-US")}</div>
+          <div class="list__meta num">${money(row.value)}</div>
+        </div></div></li>`
+      )
+      .join("");
+
+    const movementRows = movements
+      .map(
+        (movement) => `<li><div class="list__item">
+        <div class="list__main">
+          <div class="list__title">${escapeHtml(MOVEMENT_KIND_LABELS[movement.kind] || movement.kind)}</div>
+          <div class="list__meta">${date(movement.movement_date)} · ${escapeHtml(warehouseName(movement.warehouse_id))}
+            ${movement.reference ? ` · ${escapeHtml(movement.reference)}` : ""}</div>
+        </div>
+        <div style="text-align:end">
+          <div class="list__value num">${Number(movement.quantity).toLocaleString("en-US")}</div>
+          <div class="list__meta num">${money(movement.total_cost)}</div>
+        </div></div></li>`
+      )
+      .join("");
+
+    setScreen(
+      el(`<div>
+        <div class="card">
+          <div class="list__title" style="font-size:1.125rem">${escapeHtml(itemLabel(item))}</div>
+          <div class="list__meta num">${escapeHtml(item.code || "—")}
+            · ${escapeHtml(ITEM_TYPE_LABELS[item.item_type] || item.item_type)}
+            ${item.barcode ? ` · <span dir="ltr">${escapeHtml(item.barcode)}</span>` : ""}</div>
+          <div class="list__meta">سعر البيع: <span class="num">${money(item.sale_price)}</span></div>
+        </div>
+        <div class="kpi-grid">
+          <div class="kpi"><div class="kpi__label">الرصيد الحالي</div>
+            <div class="kpi__value num">${onHand.toLocaleString("en-US")}</div>
+            <div class="kpi__hint">${escapeHtml(unit)}</div></div>
+          <div class="kpi kpi--assets"><div class="kpi__label">قيمة المخزون</div>
+            <div class="kpi__value num">${money(value)}</div></div>
+        </div>
+        <div class="section-title">الأرصدة في المخازن</div>
+        <div class="card card--flush">
+          ${mine.length ? `<ul class="list">${stockRows}</ul>`
+            : emptyState("◇", "لا رصيد", "لم يُستلم هذا الصنف في أي مخزن بعد")}
+        </div>
+        <div class="section-title">آخر الحركات</div>
+        <div class="card card--flush">
+          ${movements.length ? `<ul class="list">${movementRows}</ul>`
+            : emptyState("↕", "لا حركات", "لم تُسجّل أي حركة على هذا الصنف")}
+        </div>
+        <div class="action-bar">
+          ${item.barcode
+            ? '<button class="btn btn--ghost" type="button" data-print-label>🏷️ طباعة ملصق</button>'
+            : ""}
+          ${store.can("item.manage")
+            ? '<button class="btn" data-edit-item>✎ تعديل الصنف</button>'
+            : ""}
+        </div>
+      </div>`),
+      { appbar: appbar({ title: "بطاقة الصنف", back: "#/inventory?inv=items" }) }
+    );
+
+    document.querySelector("[data-print-label]")?.addEventListener("click", (event) =>
+      printDocument("/inventory/item-labels/print-token", event.currentTarget, { ids: String(itemId) })
+    );
+
+    document.querySelector("[data-edit-item]")?.addEventListener("click", async () => {
+      const lookups = await loadInventoryLookups();
+      openItemSheet({ ...lookups, itemId }, () => {
+        refreshInventoryLookups();
+        renderItemCard(itemId);
+      });
+    });
+  } catch (error) {
+    setScreen(emptyState("⚠️", "خطأ", error.message), { tabbar: tabbar() });
+  }
+}
 
 async function renderInventory() {
   const view = hashParam("inv", "stock");
@@ -2533,7 +2871,7 @@ async function renderInventoryStock(tabs, view) {
     const rows = stock
       .map(
         (s) => `<tr${Number(s.quantity) < 0 ? ' class="row--negative"' : ""}>
-        <td>${escapeHtml(s.item_name_ar || s.item_name)}</td>
+        <td><a href="#/inventory/item/${s.item_id}">${escapeHtml(s.item_name_ar || s.item_name)}</a></td>
         <td>${escapeHtml(s.warehouse_name)}</td>
         <td>${escapeHtml(s.unit)}</td>
         <td class="num">${Number(s.quantity).toLocaleString("en-US")}</td>
@@ -2595,6 +2933,7 @@ async function renderInventoryItems(tabs, view) {
             · ${escapeHtml(ITEM_TYPE_LABELS[item.item_type] || item.item_type)}
             ${item.base_unit_id ? ` · ${escapeHtml(unitName(item.base_unit_id))}` : ""}
             ${item.track_inventory ? "" : " · لا يتابع مخزوناً"}</div>
+          ${item.barcode ? `<div class="list__meta num" dir="ltr">${escapeHtml(item.barcode)}</div>` : ""}
         </div>
         <div style="text-align:end">
           <div class="list__value num">${money(item.sale_price)}</div>
@@ -2607,18 +2946,22 @@ async function renderInventoryItems(tabs, view) {
       el(`<div>
         ${subTabs("inv", tabs, view)}
         <div class="card">
-          <div class="field" style="margin:0">
-            <input class="input" id="item-search" type="search" placeholder="ابحث بالاسم أو الكود"
+          <div class="field field--inline" style="margin:0">
+            <input class="input" id="item-search" type="search" placeholder="ابحث بالاسم أو الكود أو الباركود"
               value="${escapeHtml(search)}" />
+            ${search ? '<button class="btn btn--ghost btn--sm" type="button" data-clear-search>مسح</button>' : ""}
           </div>
         </div>
         <div class="card card--flush">
           ${items.length ? `<ul class="list">${rows}</ul>`
             : emptyState("◇", "لا توجد أصناف", "أضف صنفاً ليظهر في الفواتير والمخزون")}
         </div>
-        ${store.can("item.manage")
-          ? `<div class="action-bar"><button class="btn" data-new-item>＋ صنف جديد</button></div>`
-          : ""}
+        <div class="action-bar">
+          <button class="btn btn--ghost" type="button" data-print-labels>🏷️ ملصقات الأصناف</button>
+          ${store.can("item.manage")
+            ? '<button class="btn" data-new-item>＋ صنف جديد</button>'
+            : ""}
+        </div>
       </div>`),
       { appbar: appbar({ title: "الأصناف" }), tabbar: tabbar() }
     );
@@ -2628,6 +2971,12 @@ async function renderInventoryItems(tabs, view) {
       const value = searchInput.value.trim();
       location.hash = value ? `#/inventory?inv=items&q=${encodeURIComponent(value)}` : "#/inventory?inv=items";
     });
+    document.querySelector("[data-clear-search]")?.addEventListener("click", () => {
+      location.hash = "#/inventory?inv=items";
+    });
+    document.querySelector("[data-print-labels]")?.addEventListener("click", (event) =>
+      printDocument("/inventory/item-labels/print-token", event.currentTarget)
+    );
     document.querySelector("[data-new-item]")?.addEventListener("click", () =>
       openItemSheet({ units, warehouses }, () => {
         refreshInventoryLookups();
@@ -2635,15 +2984,81 @@ async function renderInventoryItems(tabs, view) {
       })
     );
     document.querySelectorAll("[data-item]").forEach((button) => {
-      button.onclick = () =>
-        openItemSheet({ units, warehouses, itemId: Number(button.dataset.item) }, () => {
-          refreshInventoryLookups();
-          renderInventoryItems(tabs, view);
-        });
+      button.onclick = () => {
+        location.hash = `#/inventory/item/${button.dataset.item}`;
+      };
     });
   } catch (error) {
     setScreen(emptyState("⚠️", "خطأ", error.message), { tabbar: tabbar() });
   }
+}
+
+/** Camera scanner for the barcode field, with a manual fallback.
+
+    BarcodeDetector ships only in Chromium today, so Safari and Firefox get a
+    clear message instead of a dead button. The input stays editable either
+    way, because a cheap USB scanner types into it as a keyboard.
+ */
+function scanBarcode(onValue) {
+  if (!("BarcodeDetector" in window) || !navigator.mediaDevices?.getUserMedia) {
+    toast("الكاميرا غير مدعومة على هذا المتصفح — اكتب الباركود يدوياً", "error");
+    return;
+  }
+  const sheet = el(`<div class="sheet-backdrop"><div class="sheet">
+      <div class="sheet__handle"></div>
+      <h2 class="sheet__title">مسح الباركود</h2>
+      <video class="scan-video" playsinline muted></video>
+      <p class="scan-hint">وجّه الكاميرا نحو الباركود</p>
+      <button class="btn btn--ghost btn--block" type="button" data-stop>إلغاء</button>
+    </div></div>`);
+  const video = sheet.querySelector("video");
+  const stop = () => {
+    video.srcObject?.getTracks().forEach((track) => track.stop());
+    sheet.remove();
+  };
+  sheet.querySelector("[data-stop]").onclick = stop;
+  sheet.addEventListener("click", (event) => {
+    if (event.target === sheet) stop();
+  });
+  document.body.appendChild(sheet);
+
+  const detector = new window.BarcodeDetector();
+  let stopped = false;
+  const tick = async () => {
+    if (stopped || !video.isConnected) return;
+    try {
+      const [found] = await detector.detect(video);
+      if (found?.rawValue) {
+        onValue(found.rawValue);
+        stop();
+        return;
+      }
+    } catch {
+      /* a frame can fail while the camera is still warming up */
+    }
+    requestAnimationFrame(tick);
+  };
+
+  navigator.mediaDevices
+    .getUserMedia({ video: { facingMode: "environment" } })
+    .then((stream) => {
+      video.srcObject = stream;
+      return video.play();
+    })
+    .then(tick)
+    .catch(() => {
+      stop();
+      toast("لم نتمكن من تشغيل الكاميرا — اكتب الباركود يدوياً", "error");
+    });
+  // Stop the camera if the sheet is torn down some other way.
+  const observer = new MutationObserver(() => {
+    if (!sheet.isConnected) {
+      stopped = true;
+      video.srcObject?.getTracks().forEach((track) => track.stop());
+      observer.disconnect();
+    }
+  });
+  observer.observe(document.body, { childList: true });
 }
 
 /** Create or edit an item. Editing loads the detail so variants come along. */
@@ -2654,6 +3069,11 @@ function openItemSheet({ units, warehouses, itemId }, onDone) {
       <input class="input" name="name_ar" required placeholder="مثال: ورق A4" /></div>
     <div class="field"><label class="field__label">الكود</label>
       <input class="input num" name="code" placeholder="اتركه فارغاً للتوليد التلقائي" /></div>
+    <div class="field"><label class="field__label">الباركود</label>
+      <div class="field--inline">
+        <input class="input num" name="barcode" inputmode="numeric" placeholder="امسح الباركود أو اكتبه" />
+        <button class="btn btn--ghost" type="button" data-scan-barcode>📷</button>
+      </div></div>
     <div class="field"><label class="field__label">النوع</label>
       <select class="select" name="item_type">
         ${Object.entries(ITEM_TYPE_LABELS)
@@ -2693,6 +3113,12 @@ function openItemSheet({ units, warehouses, itemId }, onDone) {
 
   const close = openSheet(isEdit ? "تعديل الصنف" : "صنف جديد", form);
 
+  form.querySelector("[data-scan-barcode]").onclick = () =>
+    scanBarcode((value) => {
+      form.elements.barcode.value = value;
+      toast("تم قراءة الباركود", "success");
+    });
+
   if (isEdit) {
     api(`/inventory/items/${itemId}`)
       .then((item) => {
@@ -2723,6 +3149,7 @@ function openItemSheet({ units, warehouses, itemId }, onDone) {
       purchase_price: Number(data.get("purchase_price") || 0),
       sale_price: Number(data.get("sale_price") || 0),
       reorder_level: Number(data.get("reorder_level") || 0),
+      barcode: String(data.get("barcode") || "").trim(),
       track_inventory: form.elements.track_inventory.checked,
     };
     if (!body.code) delete body.code; // let the server number it
@@ -4203,6 +4630,7 @@ function route() {
     case "accounts":
       return renderAccounts();
     case "inventory":
+      if (param === "item" && sub) return renderItemCard(Number(sub));
       return renderInventory();
     case "journal":
       return param === "new" ? renderJournalForm() : renderJournal();
@@ -4236,10 +4664,23 @@ document.addEventListener("click", (event) => {
   if (event.target.closest("[data-close-sidebar]")) toggleSidebar(false);
   if (event.target.closest("[data-logout]")) logout();
   if (event.target.closest("[data-open-theme]")) openThemePicker();
+  if (event.target.closest("[data-toggle-privacy]")) {
+    const on = !isPrivacyMode();
+    setPrivacyMode(on);
+    event.target.closest("[data-toggle-privacy]").textContent = on ? "🙈" : "👁";
+    event.target.closest("[data-toggle-privacy]").setAttribute("aria-pressed", String(on));
+    route();
+  }
   if (event.target.closest("[data-subtab]")) {
     const [group, key] = event.target.closest("[data-subtab]").dataset.subtab.split(":");
     const [path] = location.hash.split("?");
     location.hash = `${path}?${group}=${key}`;
+  }
+  const clearPeriod = event.target.closest("[data-clear-period]");
+  if (clearPeriod) {
+    const group = clearPeriod.dataset.clearPeriod;
+    setHashQuery({ [`${group}_start`]: null, [`${group}_end`]: null });
+    return;
   }
   if (event.target.closest("[data-toggle-dark]")) {
     const dark = document.documentElement.dataset.theme !== "dark";
@@ -4248,6 +4689,21 @@ document.addEventListener("click", (event) => {
   }
   // A sidebar link navigates by hash, so the drawer must close by hand on phones.
   if (event.target.closest(".sidebar__link")) toggleSidebar(false);
+});
+
+/* A period field is applied on change rather than on a submit button: two
+   fields and one tap is the whole interaction on a phone. */
+document.addEventListener("change", (event) => {
+  const field = event.target.closest("[data-period]");
+  if (!field) return;
+  const [group] = field.dataset.period.split(":");
+  const start = document.querySelector(`[data-period="${group}:start"]`)?.value || "";
+  const end = document.querySelector(`[data-period="${group}:end"]`)?.value || "";
+  if (start && end && start > end) {
+    toast("تاريخ البداية بعد تاريخ النهاية", "error");
+    return;
+  }
+  setHashQuery({ [`${group}_start`]: start, [`${group}_end`]: end });
 });
 
 window.addEventListener("hashchange", route);

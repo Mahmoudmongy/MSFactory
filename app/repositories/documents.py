@@ -96,7 +96,13 @@ class InvoiceRepository:
             raise NotFoundError("Invoice not found")
         return invoice
 
-    def list(self, kind: str | None = None, contact_id: int | None = None) -> list[Invoice]:
+    def list(
+        self,
+        kind: str | None = None,
+        contact_id: int | None = None,
+        start: date | None = None,
+        end: date | None = None,
+    ) -> list[Invoice]:
         stmt = (
             select(Invoice)
             .options(selectinload(Invoice.lines), selectinload(Invoice.contact))
@@ -107,6 +113,10 @@ class InvoiceRepository:
             stmt = stmt.where(Invoice.kind == kind)
         if contact_id:
             stmt = stmt.where(Invoice.contact_id == contact_id)
+        if start:
+            stmt = stmt.where(Invoice.issue_date >= start)
+        if end:
+            stmt = stmt.where(Invoice.issue_date <= end)
         return list(self.db.scalars(stmt))
 
     def returns_of(self, invoice_id: int) -> list[Invoice]:
@@ -187,7 +197,12 @@ class PaymentRepository:
             raise NotFoundError("Payment not found")
         return payment
 
-    def list(self, kind: str | None = None) -> list[Payment]:
+    def list(
+        self,
+        kind: str | None = None,
+        start: date | None = None,
+        end: date | None = None,
+    ) -> list[Payment]:
         stmt = (
             select(Payment)
             .options(selectinload(Payment.contact))
@@ -196,6 +211,10 @@ class PaymentRepository:
         )
         if kind:
             stmt = stmt.where(Payment.kind == kind)
+        if start:
+            stmt = stmt.where(Payment.date >= start)
+        if end:
+            stmt = stmt.where(Payment.date <= end)
         return list(self.db.scalars(stmt))
 
     def add_allocation(self, allocation: PaymentAllocation) -> PaymentAllocation:

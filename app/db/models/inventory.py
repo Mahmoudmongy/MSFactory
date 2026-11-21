@@ -159,6 +159,22 @@ class Item(Base, TenantMixin, TimestampMixin):
         "ItemVariant", back_populates="item", cascade="all, delete-orphan", order_by="ItemVariant.id"
     )
 
+    @property
+    def barcode(self) -> str:
+        """The item's own barcode, held on its first variant.
+
+        Barcodes live per variant because a colour or size scans differently,
+        but most items have exactly one variant and the user thinks of the
+        code as belonging to the item. Exposing it here keeps the API honest
+        without a second column that could disagree with the variant's.
+        """
+        return self.variants[0].barcode if self.variants else ""
+
+    @barcode.setter
+    def barcode(self, value: str) -> None:
+        if self.variants:
+            self.variants[0].barcode = value or ""
+
 
 class ItemVariant(Base, TenantMixin, TimestampMixin):
     """One sellable form of an item: a colour, a size, or a combination.
