@@ -858,7 +858,10 @@ async function renderInvoiceForm({ invoiceId } = {}) {
 
     <div class="section-title">بنود الفاتورة</div>
     <div id="lines"></div>
-    <button type="button" class="btn btn--ghost btn--block" data-add-line>＋ إضافة بند</button>
+    <div class="line-actions">
+      <button type="button" class="btn btn--ghost" data-add-line>＋ إضافة بند</button>
+      <button type="button" class="btn btn--ghost" data-scan-line>📷 مسح باركود</button>
+    </div>
 
     <div class="card" style="margin-top:12px">
       <div class="totals">
@@ -996,6 +999,66 @@ async function renderInvoiceForm({ invoiceId } = {}) {
   }
 
   view.querySelector("[data-add-line]").onclick = () => addLine();
+
+  /* Scanning into an invoice: the code resolves to an item and a line is filled
+     in, so the user only adjusts quantity. An unknown code says so out loud —
+     a scanner that silently adds nothing looks broken, and the code may simply
+     not be in the books yet. */
+  async function addLineFromBarcode(code) {
+    const trimmed = String(code || "").trim();
+    if (!trimmed) return;
+    let item = null;
+    try {
+      item = await api(`/inventory/items/by-barcode/${encodeURIComponent(trimmed)}`);
+    } catch {
+      item = null;
+    }
+    if (!item) {
+      toast(`لا يوجد صنف بالباركود ${trimmed}`, "error");
+      return;
+    }
+    const line = {
+      description: itemLabel(item),
+      item_id: item.id,
+      quantity: 1,
+      unit_price: Number(kind === "purchase" ? item.purchase_price : item.sale_price) || 0,
+      discount_rate: 0,
+      tax_rate: defaultRate,
+    };
+    addLine(line);
+    recalc();
+    toast(`تمت إضافة ${itemLabel(item)}`, "success");
+  }
+
+  view.querySelector("[data-scan-line]").onclick = () => {
+    const form = el(`<form novalidate>
+      <div class="field"><label class="field__label">الباركود</label>
+        <div class="field--inline">
+          <input class="input num" name="code" inputmode="numeric" autofocus
+            placeholder="امسح الباركود أو اكتبه" />
+          <button class="btn btn--ghost" type="button" data-scan-now>📷</button>
+        </div>
+        <div class="field__hint">أو استخدم ماسح USB — يكتب في الحقل مباشرة</div>
+      </div>
+      <button class="btn btn--block" type="submit">إضافة البند</button>
+    </form>`);
+    const close = openSheet("مسح باركود", form);
+    const submit = async () => {
+      const code = form.elements.code.value;
+      close();
+      await addLineFromBarcode(code);
+    };
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      submit();
+    };
+    form.querySelector("[data-scan-now]").onclick = () =>
+      scanBarcode((value) => {
+        form.elements.code.value = value;
+        submit();
+      });
+    form.elements.code.focus();
+  };
   view.querySelectorAll("[data-kind]").forEach((button) => {
     button.onclick = () => {
       kind = button.dataset.kind;
@@ -2644,7 +2707,7 @@ async function renderInventoryItems(tabs, view) {
         ${subTabs("inv", tabs, view)}
         <div class="card">
           <div class="field field--inline" style="margin:0">
-            <input class="input" id="item-search" type="search" placeholder="ابحث بالاسم أو الكود"
+            <input class="input" id="item-search" type="search" placeholder="ابحث بالاسم أو الكود أو الباركود"
               value="${escapeHtml(search)}" />
             ${search ? '<button class="btn btn--ghost btn--sm" type="button" data-clear-search>مسح</button>' : ""}
           </div>

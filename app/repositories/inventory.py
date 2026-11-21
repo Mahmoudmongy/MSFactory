@@ -134,7 +134,12 @@ class ItemRepository:
         )
         if search:
             like = f"%{search.strip()}%"
-            stmt = stmt.where(Item.name.ilike(like) | Item.code.ilike(like) | Item.name_ar.ilike(like))
+            stmt = stmt.where(
+                Item.name.ilike(like)
+                | Item.code.ilike(like)
+                | Item.name_ar.ilike(like)
+                | Item.variants.any(ItemVariant.barcode.ilike(like))
+            )
         if item_type:
             stmt = stmt.where(Item.item_type == item_type)
         if group_id:
@@ -155,6 +160,22 @@ class ItemRepository:
 
     def by_code(self, code: str) -> Item | None:
         return self.db.scalar(scoped(select(Item).where(Item.code == code), Item, self.company_id))
+
+    def by_barcode(self, barcode: str) -> Item | None:
+        """The one item a scanner just read.
+
+        Exact match, not a LIKE: a barcode is a complete code, and a prefix
+        match would pick the wrong item when one code is a prefix of another.
+        """
+        code = (barcode or "").strip()
+        if not code:
+            return None
+        return self.db.scalar(
+            scoped(select(Item), Item, self.company_id)
+            .options(selectinload(Item.variants))
+            .where(Item.variants.any(ItemVariant.barcode == code))
+            .limit(1)
+        )
 
     def add(self, item: Item) -> Item:
         item.company_id = self.company_id

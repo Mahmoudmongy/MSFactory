@@ -158,6 +158,28 @@ def create_item(
     )
 
 
+@router.get("/items/by-barcode/{barcode}", response_model=ItemDetailOut)
+def get_item_by_barcode(
+    barcode: str,
+    principal: Principal = Depends(require(Permission.ITEM_VIEW)),
+    db: Session = Depends(get_session),
+):
+    """Resolve a scanned code to one item, for the invoice line scanner.
+
+    404 rather than an empty list: the caller is a scanner that needs to know
+    the code is unknown, so it can say so instead of silently adding nothing.
+    """
+    item = ItemRepository(db, principal.company_id).by_barcode(barcode)
+    if not item:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "barcode_not_found", "message": "لا يوجد صنف بهذا الباركود"},
+        )
+    return ItemDetailOut.model_validate(
+        {**ItemOut.model_validate(item).model_dump(), "variants": item.variants}
+    )
+
+
 @router.get("/items/{item_id}", response_model=ItemDetailOut)
 def get_item(
     item_id: int,

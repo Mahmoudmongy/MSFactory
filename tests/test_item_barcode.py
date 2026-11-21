@@ -95,3 +95,54 @@ def test_item_with_variants_keeps_each_variant_barcode(client):
     # The item-level barcode mirrors the first variant, which is what a
     # single-field form would have written.
     assert item["barcode"] == "1001"
+
+
+def test_scanning_a_barcode_resolves_to_its_item(client):
+    """What the invoice scanner does: one code in, one item out."""
+    token = register(client, email="barcode-scan@acme.eg")
+    item = create_item(client, token, barcode="6221031407777")
+
+    found = client.get("/api/v1/inventory/items/by-barcode/6221031407777", headers=auth(token))
+    assert found.status_code == 200, found.text
+    body = found.json()
+    assert body["id"] == item["id"]
+    assert body["barcode"] == "6221031407777"
+    # The scanner needs the variants to know what it is adding.
+    assert body["variants"][0]["barcode"] == "6221031407777"
+
+
+def test_scanning_an_unknown_barcode_is_a_404_not_an_empty_row(client):
+    token = register(client, email="barcode-miss@acme.eg")
+    create_item(client, token, barcode="6221031408888")
+
+    response = client.get("/api/v1/inventory/items/by-barcode/0000000000000", headers=auth(token))
+    assert response.status_code == 404, response.text
+    assert response.json()["detail"]["code"] == "barcode_not_found"
+
+
+def test_a_barcode_prefix_does_not_match_a_longer_code(client):
+    """Exact match only: '622' must not resolve to '6221031409999'."""
+    token = register(client, email="barcode-exact@acme.eg")
+    create_item(client, token, barcode="6221031409999")
+
+    response = client.get("/api/v1/inventory/items/by-barcode/622", headers=auth(token))
+    assert response.status_code == 404, response.text
+
+
+def test_searching_the_item_list_finds_a_barcode(client):
+    token = register(client, email="barcode-search@acme.eg")
+    create_item(client, token, name="صنف أول", name_ar="صنف أول", barcode="900100200")
+    create_item(client, token, name="صنف ثانٍ", name_ar="صنف ثانٍ", barcode="900100300")
+
+    rows = client.get("/api/v1/inventory/items?search=9001002", headers=auth(token)).json()
+    assert [row["name_ar"] for row in rows] == ["صنف أول"]
+
+
+def test_barcode_lookup_stays_inside_the_company(client):
+    """A code in another tenant's books must not resolve here."""
+    token_a = register(client, email="barcode-tenant-a@acme.eg", company="شركة أ")
+    create_item(client, token_a, barcode="7111222333")
+
+    token_b = register(client, email="barcode-tenant-b@acme.eg", company="شركة ب")
+    response = client.get("/api/v1/inventory/items/by-barcode/7111222333", headers=auth(token_b))
+    assert response.status_code == 404, response.text
