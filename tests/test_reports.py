@@ -8,6 +8,7 @@ the accounting identity it must satisfy.
 from __future__ import annotations
 
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -378,3 +379,79 @@ class TestReportsAreScoped:
         for endpoint in endpoints:
             response = client.get(f"/api/v1/reports/{endpoint}", headers=auth(token))
             assert response.status_code == 200, f"{endpoint}: {response.text}"
+
+# ------------------------------------------------------- clearing the filters
+
+STATIC_APP = Path(__file__).resolve().parent.parent / "static" / "app.js"
+
+
+def _reports_screen_source() -> str:
+    js = STATIC_APP.read_text(encoding="utf-8")
+    start = js.index("async function renderReports()")
+    end = js.index("async function renderReport(", start)
+    return js[start:end]
+
+
+def test_the_report_search_can_be_cleared():
+    """A filter you cannot undo on a phone means backing out of the screen.
+
+    Typing narrows the catalogue; the clear button must restore every category
+    and hide itself again, otherwise a typo leaves the user with an empty list.
+    """
+    source = _reports_screen_source()
+    assert "data-clear-search" in source
+    assert "applyFilter" in source
+    assert 'searchInput.value = ""' in source
+
+
+def test_the_clear_button_is_only_shown_while_a_term_is_active():
+    source = _reports_screen_source()
+    assert "clearButton.hidden = !term" in source
+
+
+def test_the_item_search_can_be_cleared():
+    js = STATIC_APP.read_text(encoding="utf-8")
+    start = js.index('id="item-search"')
+    window = js[start:start + 2500]
+    assert "data-clear-search" in window
+    assert "#/inventory?inv=items" in window
+
+
+def test_the_inline_field_style_exists():
+    css = (Path(__file__).resolve().parent.parent / "static" / "styles.css").read_text(
+        encoding="utf-8"
+    )
+    assert ".field--inline" in css
+
+# ------------------------------------------------------------ privacy mode
+
+
+def _app_source() -> str:
+    return STATIC_APP.read_text(encoding="utf-8")
+
+
+def test_privacy_mode_masks_every_amount():
+    """Showing the books to a visitor must not expose the figures.
+
+    money() is the only place an amount becomes text, so masking it there
+    covers every screen at once instead of one table at a time.
+    """
+    js = _app_source()
+    start = js.index("export function money(")
+    body = js[start:start + 400]
+    assert "privacyMode" in body
+    assert "•••••" in body
+
+
+def test_privacy_mode_is_remembered_and_reflected_on_the_toggle():
+    js = _app_source()
+    assert "msfactory.privacy" in js
+    assert "data-toggle-privacy" in js
+    assert "setPrivacyMode" in js
+    assert "aria-pressed" in js
+
+
+def test_privacy_mode_masks_display_but_never_an_input_value():
+    """A masked input would save "•••••" back to the database."""
+    js = _app_source()
+    assert 'value="${money(' not in js

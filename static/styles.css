@@ -339,6 +339,9 @@ button { cursor: pointer; }
 
 /* ---------- Forms ---------- */
 .field { margin-bottom: 14px; }
+.field--inline { display: flex; align-items: center; gap: 8px; }
+.field--inline .input { flex: 1 1 auto; min-width: 0; }
+.field--inline .btn { flex: 0 0 auto; }
 .field__label { display: block; font-size: 0.82rem; font-weight: 600; color: var(--ink-700); margin-bottom: 6px; }
 .field__hint { font-size: 0.72rem; color: var(--ink-500); margin-top: 4px; }
 .field__error { font-size: 0.75rem; color: var(--danger-fg); margin-top: 4px; font-weight: 600; }
@@ -706,3 +709,14 @@ tr.row--negative td { background: var(--danger-bg); color: var(--danger-fg); fon
 
 /* `hidden` must win over the flex/grid display rules the form fields carry. */
 [hidden] { display: none !important; }
+
+/* Camera preview for the barcode scanner: square, mirrored off, letterboxed. */
+.scan-video {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  background: #000;
+  border-radius: var(--radius);
+  object-fit: cover;
+  margin: 4px 0 10px;
+}
+.scan-hint { margin: 0 0 14px; text-align: center; color: var(--muted); font-size: 13px; }
